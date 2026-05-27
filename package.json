@@ -1,0 +1,43 @@
+{
+  "name": "slot-api-helper",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "lint": "bun run type:check && bun run prettier:check && bun run lint:code",
+    "lint:fix": "bun run prettier:fix && bun run lint:code --fix",
+    "type:check": "tsc --noEmit",
+    "lint:code": "eslint \"./**/*.{js,ts}\" --quiet",
+    "prettier:check": "prettier --check \"**/*.{ts,js}\"",
+    "prettier:fix": "prettier --write \"**/*.{ts,js}\"",
+    "pretest": "bun run lint",
+    "test": "bun test && bunx bats tests/",
+    "test:cov": "bun test --coverage && bunx bats tests/",
+    "precommit": "bun run lint:fix && bun run test:cov"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ikigai-kyle-c/slot-api-helper.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/ikigai-kyle-c/slot-api-helper/issues"
+  },
+  "homepage": "https://github.com/ikigai-kyle-c/slot-api-helper#readme",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@happy-dom/global-registrator": "^20.9.0",
+    "bats": "^1.13.0",
+    "eslint": "^10.4.0",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.3",
+    "prettier-plugin-organize-imports": "^4.3.0",
+    "supertest": "^7.2.2",
+    "typescript": "^6.0.3"
+  }
+}
