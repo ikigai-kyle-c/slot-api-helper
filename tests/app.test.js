@@ -119,14 +119,24 @@ describe('UI & UX Full Coverage Tests', () => {
   });
 
   test('Backend URL Switcher and Ping Healthcheck', async () => {
+    // Because it defaults to CIT, click LOCAL to test switching
+    const localRadio = document.querySelector('input[value="LOCAL"]');
+    localRadio.click();
+    localRadio.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await Bun.sleep(50);
+
+    expect(document.querySelector('#global-domain').value).toContain('localhost');
+    expect(document.querySelector('#global-signature').value).toBe('rgs-local-signature');
+    expect(document.querySelector('#healthcheck-status').innerHTML).toContain('Reachable');
+
+    // Switch back to CIT to test the new RGS domain
     const citRadio = document.querySelector('input[value="CIT"]');
     citRadio.click();
     citRadio.dispatchEvent(new window.Event('change', { bubbles: true }));
     await Bun.sleep(50);
-    expect(document.querySelector('#global-domain').value).toContain('iki-cit');
-    expect(document.querySelector('#global-signature').value).toBe('rgs-cit-signature');
-    expect(document.querySelector('#healthcheck-status').innerHTML).toContain('Reachable');
+    expect(document.querySelector('#global-domain').value).toContain('letsgo-rgs-gs1.iki-cit.cc');
 
+    // Test Unreachable Ping
     document.querySelector('#global-domain').value = 'http://FAIL';
     document.querySelector('#global-domain').dispatchEvent(new window.Event('input'));
     await Bun.sleep(550);

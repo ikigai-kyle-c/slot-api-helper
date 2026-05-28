@@ -315,7 +315,7 @@ function sessionStartPayload(gameCode) {
     balance: '10000',
     maxExposure: 0,
     licenseConfig: {},
-    callback: 'http://localhost',
+    callback: 'https://httpbin.org/status/200', // <-- Safe mock URL
   };
 }
 function sessionStartPayloadTemplate() {
@@ -1016,7 +1016,7 @@ function defaultConfig() {
 
   return {
     global: {
-      apiDomain: rgs.API_DOMAIN || 'localhost:19080',
+      apiDomain: rgs.API_DOMAIN || 'https://letsgo-rgs-gs1.iki-cit.cc',
       signature: rgs.API_SIGNATURE || 'rgs-local-signature',
       gameCode: rgs.GAME_CODE || 'LGS-006',
     },
@@ -1054,7 +1054,7 @@ function defaultConfig() {
       userId: maintenance.AM_USER_ID || '0',
       account: maintenance.AM_ACCOUNT || 'kyle.c',
       code: maintenance.AM_CODE || 'SLT',
-      routeKey: maintenance.AM_ROUTE_KEY || 'V1_INTERNAL_GAME_MAINTENANCE',
+      routeKey: maintenance.AM_ROUTE_KEY || '*',
       gameCode: maintenance.MAINTENANCE_GAME_CODE || '',
       isMaintenance: maintenance.IS_MAINTENANCE === 'true',
       amTokenHeadersJson: prettyJson(amTokenHeadersTemplate()),

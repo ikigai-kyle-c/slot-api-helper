@@ -11,6 +11,7 @@ const tabs = document.querySelectorAll('.tab');
 const modal = document.querySelector('#settings-modal');
 const btnOpenSettings = document.querySelector('#btn-open-settings');
 const btnCloseSettings = document.querySelector('#btn-close-settings');
+const btnClearCache = document.querySelector('#btn-clear-cache'); // <-- Add this line
 
 const globalDomainEl = document.querySelector('#global-domain');
 const globalSignatureEl = document.querySelector('#global-signature');
@@ -20,10 +21,11 @@ const healthStatusEl = document.querySelector('#healthcheck-status');
 const envRadios = document.querySelectorAll('input[name="envType"]');
 
 // Map environments to default configuration values
+// Map environments to default configuration values
 const ENV_CONFIG = {
   LOCAL: { url: 'http://localhost:19080', sig: 'rgs-local-signature', gc: 'LGS-006' },
-  CIT: { url: 'https://letsgo-game-gs1.iki-cit.cc', sig: 'rgs-cit-signature', gc: 'LGS-006' },
-  QAT: { url: 'https://letsgo-game-gs1.iki-qat.cc', sig: 'rgs-qat-signature', gc: 'LGS-006' },
+  CIT: { url: 'https://letsgo-rgs-gs1.iki-cit.cc', sig: 'rgs-local-signature', gc: 'LGS-006' },
+  QAT: { url: 'https://letsgo-rgs-gs1.iki-qat.cc', sig: 'rgs-local-signature', gc: 'LGS-006' },
 };
 
 const wsTabs = document.querySelectorAll('.ws-tab');
@@ -150,6 +152,14 @@ btnOpenSettings.addEventListener('click', () => modal.classList.add('is-active')
 btnCloseSettings.addEventListener('click', () => modal.classList.remove('is-active'));
 modal.addEventListener('click', (e) => {
   if (e.target === modal) modal.classList.remove('is-active');
+});
+
+// Clear Cache Logic
+btnClearCache.addEventListener('click', () => {
+  if (confirm('Are you sure you want to clear all cached inputs? This will reload the page and reset everything to defaults.')) {
+    localStorage.clear();
+    window.location.reload();
+  }
 });
 
 // Workspace Tab Logic
@@ -474,3 +484,17 @@ maintenanceForm.addEventListener('submit', (e) => {
 });
 
 Promise.all([loadConfig(), loadRecords()]).catch(() => setStatus('Error', 'error'));
+
+// Smart Ctrl+A Trapping for Code Blocks
+document.querySelectorAll('pre[tabindex="0"]').forEach((pre) => {
+  pre.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+      e.preventDefault(); // Stop whole page selection
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(pre);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  });
+});

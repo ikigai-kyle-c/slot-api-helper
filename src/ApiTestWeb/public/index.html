@@ -54,12 +54,12 @@
 
         <div class="backend-env-widget">
           <div class="backend-tabs">
-            <label class="env-pill"><input type="radio" name="envType" value="LOCAL" checked><span>LOCALHOST</span></label>
-            <label class="env-pill"><input type="radio" name="envType" value="CIT"><span>CIT</span></label>
+            <label class="env-pill"><input type="radio" name="envType" value="LOCAL"><span>LOCALHOST</span></label>
+            <label class="env-pill"><input type="radio" name="envType" value="CIT" checked><span>CIT</span></label>
             <label class="env-pill"><input type="radio" name="envType" value="QAT"><span>QAT</span></label>
           </div>
           <div class="backend-input-row">
-            <input type="text" id="global-domain" name="apiDomain" placeholder="http://localhost:19080" autocomplete="off">
+            <input type="text" id="global-domain" name="apiDomain" placeholder="https://letsgo-rgs-gs1.iki-cit.cc" autocomplete="off">
             <div id="healthcheck-status" class="health-status">Checking...</div>
           </div>
           <div class="backend-params-row">
@@ -69,6 +69,7 @@
         </div>
 
         <div class="topbar-actions">
+          <button id="btn-clear-cache" class="btn-settings cache-btn">🗑️ Clear Cache</button>
           <button id="btn-open-settings" class="btn-settings">⚙️ Local Deploy</button>
           <div id="status" class="status badge idle">Idle</div>
         </div>
@@ -233,8 +234,8 @@
               <span id="result-file" class="text-xs ml-auto"></span>
             </div>
             <div class="workspace-content">
-              <div id="ws-result" class="ws-panel is-active"><pre id="result-output">{}</pre></div>
-              <div id="ws-trace" class="ws-panel"><pre id="trace-output">[]</pre></div>
+              <div id="ws-result" class="ws-panel is-active"><pre id="result-output" tabindex="0">{}</pre></div>
+              <div id="ws-trace" class="ws-panel"><pre id="trace-output" tabindex="0">[]</pre></div>
             </div>
           </div>
           <section class="records-panel card mt-4">

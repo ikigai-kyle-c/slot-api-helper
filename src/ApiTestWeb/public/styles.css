@@ -142,3 +142,19 @@ details.local-overrides[open] summary h3 { color: var(--text); margin-bottom: 8p
   .content-layout { grid-template-columns: 1fr; overflow: visible; }
   .controls-column, .workspace-column { overflow: visible; height: auto; }
 }
+
+pre[tabindex="0"]:focus {
+  outline: 1px solid var(--accent);
+  border-radius: 4px;
+}
+
+.cache-btn {
+  border-color: var(--danger);
+  color: #f87171;
+  background: transparent;
+}
+
+.cache-btn:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger);
+}
