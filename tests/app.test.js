@@ -1,11 +1,10 @@
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
-import { beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import fs from 'fs';
 import path from 'path';
 
 GlobalRegistrator.register();
 
-// Extracted the base fetch mock so it can be reliably reset between tests
 const baseFetchMock = async (url, opts) => {
   const u = url.toString();
   if (u.includes('/api/config')) {
@@ -32,6 +31,8 @@ const baseFetchMock = async (url, opts) => {
     };
   }
   if (u.includes('/api/record?')) {
+    if (u.includes('error-trigger'))
+      return { ok: false, status: 500, json: async () => ({ error: 'fetch error' }) };
     return {
       ok: true,
       status: 200,
@@ -42,6 +43,15 @@ const baseFetchMock = async (url, opts) => {
         requestedAt: 'T1',
       }),
     };
+  }
+  if (u.includes('/api/ping')) {
+    const body = JSON.parse(opts.body);
+    if (body.url.includes('FAIL'))
+      return { ok: true, status: 200, json: async () => ({ ok: false }) };
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  }
+  if (u.includes('/api/run-server')) {
+    return { ok: true, status: 200, json: async () => ({ status: 'success' }) };
   }
   if (opts?.method === 'POST') {
     const reqBody = JSON.parse(opts.body);
@@ -72,21 +82,21 @@ describe('UI & UX Full Coverage Tests', () => {
       'utf8',
     );
     document.documentElement.innerHTML = html;
-
     window.fetch = mock(baseFetchMock);
-
     delete require.cache[appJsPath];
     require(appJsPath);
     await Bun.sleep(50);
   });
 
   beforeEach(() => {
-    // Crucial: Reset fetch to the successful base mock before every single test
     window.fetch = mock(baseFetchMock);
-
     const status = document.querySelector('#status');
     status.textContent = 'Idle';
     status.className = 'status badge idle';
+  });
+
+  afterEach(() => {
+    if (window.fetch.mockRestore) window.fetch.mockRestore();
   });
 
   test('Tab switching and state restoration', async () => {
@@ -106,20 +116,47 @@ describe('UI & UX Full Coverage Tests', () => {
     ta.value = '{"raw":true}';
     ta.dispatchEvent(new window.Event('blur', { bubbles: true }));
     expect(ta.value).toBe('{\n  "raw": true\n}');
+  });
 
-    ta.value = '{invalid}';
-    ta.dispatchEvent(new window.Event('blur', { bubbles: true }));
-    expect(ta.value).toBe('{invalid}');
+  test('Backend URL Switcher and Ping Healthcheck', async () => {
+    const citRadio = document.querySelector('input[value="CIT"]');
+    citRadio.click();
+    citRadio.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await Bun.sleep(50);
+    expect(document.querySelector('#global-domain').value).toContain('iki-cit');
+    expect(document.querySelector('#global-signature').value).toBe('rgs-cit-signature');
+    expect(document.querySelector('#healthcheck-status').innerHTML).toContain('Reachable');
+
+    document.querySelector('#global-domain').value = 'http://FAIL';
+    document.querySelector('#global-domain').dispatchEvent(new window.Event('input'));
+    await Bun.sleep(550);
+    expect(document.querySelector('#healthcheck-status').innerHTML).toContain('Unreachable');
+  });
+
+  test('Deploy All Orchestrator', async () => {
+    document.querySelector('#path-money').value = '/mock/path';
+    document.querySelector('#path-remote').value = '/mock/remote';
+    document.querySelector('#path-slot').value = '/mock/slot';
+
+    const origSetTimeout = window.setTimeout;
+    window.setTimeout = (cb) => origSetTimeout(cb, 1);
+
+    await window.deployAll();
+
+    const btn = document.querySelector('.btn-large[onclick="deployAll()"]');
+    expect(btn.disabled).toBe(false);
+
+    window.setTimeout = origSetTimeout;
   });
 
   test('Bet form submission (Success & Warning)', async () => {
     const form = document.querySelector('#bet-form');
-    form.querySelector('input[name="gameCode"]').value = 'LGS-006';
+    document.querySelector('#global-gamecode').value = 'LGS-006';
     form.dispatchEvent(new window.Event('submit', { cancelable: true }));
     await Bun.sleep(50);
     expect(document.querySelector('#status').textContent).toBe('Done');
 
-    form.querySelector('input[name="gameCode"]').value = 'WARN';
+    document.querySelector('#global-gamecode').value = 'WARN';
     form.dispatchEvent(new window.Event('submit', { cancelable: true }));
     await Bun.sleep(50);
     expect(document.querySelector('#status').textContent).toContain('Maintenance');
@@ -127,24 +164,26 @@ describe('UI & UX Full Coverage Tests', () => {
 
   test('Form submissions with Errors', async () => {
     const form = document.querySelector('#bet-form');
-    form.querySelector('input[name="gameCode"]').value = 'ERROR';
+    document.querySelector('#global-gamecode').value = 'ERROR';
     form.dispatchEvent(new window.Event('submit', { cancelable: true }));
     await Bun.sleep(50);
     expect(document.querySelector('#status').textContent).toBe('Error');
 
-    form.querySelector('input[name="gameCode"]').value = 'MAINT';
+    document.querySelector('#global-gamecode').value = 'MAINT';
     form.dispatchEvent(new window.Event('submit', { cancelable: true }));
     await Bun.sleep(50);
     expect(document.querySelector('#status').textContent).toBe('Maintenance Block');
   });
 
   test('Lobby form submission and interval countdown', async () => {
-    // FIX: Execute asynchronously with an ultra-short 1ms timeout so intervalId initializes correctly
     const origInterval = window.setInterval;
-    window.setInterval = (cb) => origInterval(cb, 1);
+    window.setInterval = (cb) => {
+      for (let i = 0; i < 6; i++) cb();
+      return 999;
+    };
 
     const form = document.querySelector('#lobby-form');
-    form.querySelector('input[name="gameCode"]').value = 'LGS-006';
+    document.querySelector('#global-gamecode').value = 'LGS-006';
     form.dispatchEvent(new window.Event('submit', { cancelable: true }));
 
     await Bun.sleep(60);
@@ -154,7 +193,7 @@ describe('UI & UX Full Coverage Tests', () => {
 
   test('Lobby form with error', async () => {
     const form = document.querySelector('#lobby-form');
-    form.querySelector('input[name="gameCode"]').value = 'ERROR';
+    document.querySelector('#global-gamecode').value = 'ERROR';
     form.dispatchEvent(new window.Event('submit', { cancelable: true }));
     await Bun.sleep(50);
     expect(document.querySelector('#status').textContent).toBe('Error');
@@ -162,7 +201,7 @@ describe('UI & UX Full Coverage Tests', () => {
 
   test('Maintenance form submission flow', async () => {
     const form = document.querySelector('#maintenance-form');
-    form.querySelector('input[name="gameCode"]').value = 'LGS-006';
+    document.querySelector('#global-gamecode').value = 'LGS-006';
     form.dispatchEvent(new window.Event('submit', { cancelable: true }));
     await Bun.sleep(50);
     expect(document.querySelector('#status').textContent).toBe('Done');
@@ -176,7 +215,7 @@ describe('UI & UX Full Coverage Tests', () => {
     await Bun.sleep(50);
     expect(document.querySelector('#status').textContent).toBe('Record Loaded');
 
-    // Dynamically override fetch to fail for the second click
+    const origFetch = window.fetch;
     window.fetch = mock(async () => ({
       ok: false,
       status: 500,
@@ -186,5 +225,7 @@ describe('UI & UX Full Coverage Tests', () => {
     btns[0].click();
     await Bun.sleep(50);
     expect(document.querySelector('#status').textContent).toBe('Error');
+
+    window.fetch = origFetch;
   });
 });

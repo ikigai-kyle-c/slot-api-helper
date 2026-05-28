@@ -12,7 +12,6 @@ beforeAll(() => {
   fs.mkdirSync(rgsDir, { recursive: true });
   fs.mkdirSync(lobbyDir, { recursive: true });
   fs.mkdirSync(maintDir, { recursive: true });
-
   const validJwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjMzMzMzMzMzMzN9.sig';
   fs.writeFileSync(
     path.join(rgsDir, '.token-cache.json'),
@@ -45,6 +44,9 @@ beforeAll(() => {
     let body = {};
     let status = 200;
 
+    if (u.includes('FAIL')) throw new Error('Network Error');
+    if (u.includes('/healthcheck')) return { ok: true, status: 200, text: async () => 'ok' };
+
     if (bodyStr.includes('INVALID_TOKEN'))
       return { ok: false, status: 401, text: async () => 'unauth' };
     if (bodyStr.includes('MAINT_START')) body = { error: { message: 'maintain' } };
@@ -52,7 +54,6 @@ beforeAll(() => {
     else if (u.includes('/session/activate')) body = { data: { token: 't2', sessionId: 's1' } };
     else if (u.includes('/play/bet')) {
       if (bodyStr.includes('NO_ACTION')) body = { data: { roundId: 'r1' } };
-      // FIX: Explicitly set action to null for NO_COINS so it skips the action route completely
       else if (bodyStr.includes('NO_COINS'))
         body = {
           data: {
@@ -108,6 +109,31 @@ describe('API Server & Flow Full Coverage Tests', () => {
     expect((await request(server).get('/api/record?flow=bet&file=invalid.txt')).statusCode).toBe(
       400,
     );
+  });
+
+  test('POST /api/ping (Proxy Healthcheck)', async () => {
+    const resSuccess = await request(server)
+      .post('/api/ping')
+      .send({ url: 'http://localhost:19080' });
+    expect(resSuccess.statusCode).toBe(200);
+    expect(resSuccess.body.ok).toBe(true);
+
+    const resFail = await request(server).post('/api/ping').send({ url: 'http://FAIL' });
+    expect(resFail.statusCode).toBe(200);
+    expect(resFail.body.ok).toBe(false);
+  });
+
+  test('POST /api/run-server (Money Service)', async () => {
+    // We use __dirname because it is a guaranteed valid path, preventing the posix_spawn crash
+    const payload = { type: 'money', paths: { money: __dirname }, restartPolicy: 'ignore' };
+    const res = await request(server).post('/api/run-server').send(payload);
+    expect(res.statusCode).toBe(200);
+  });
+
+  test('POST /api/run-server (API Hub Service)', async () => {
+    const payload = { type: 'apihub', paths: { apihub: __dirname }, restartPolicy: 'ignore' };
+    const res = await request(server).post('/api/run-server').send(payload);
+    expect(res.statusCode).toBe(200);
   });
 
   test('POST /api/rgs-bet - Normal Cache Hit', async () => {

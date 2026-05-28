@@ -62,6 +62,10 @@
             <input type="text" id="global-domain" name="apiDomain" placeholder="http://localhost:19080" autocomplete="off">
             <div id="healthcheck-status" class="health-status">Checking...</div>
           </div>
+          <div class="backend-params-row">
+            <label>Signature <input id="global-signature" autocomplete="off" placeholder="rgs-local-signature"></label>
+            <label>Game Code <input id="global-gamecode" autocomplete="off" placeholder="LGS-006"></label>
+          </div>
         </div>
 
         <div class="topbar-actions">
@@ -80,10 +84,14 @@
         <div class="controls-column scrollable">
           <section id="bet-panel" class="panel is-active">
             <form id="bet-form" class="flow-form">
-              <div class="card mb-4 control-grid">
-                <label>Signature <input id="global-signature" name="signature" autocomplete="off" placeholder="rgs-local-signature"></label>
-                <label>Game Code <input id="global-gamecode" name="gameCode" autocomplete="off" placeholder="LGS-006"></label>
-              </div>
+              <details class="card local-overrides mb-4">
+                <summary><h3>🔧 Local Overrides (Target Environment)</h3></summary>
+                <div class="control-grid mt-4">
+                  <label>API domain <input name="apiDomain" placeholder="Override global..." autocomplete="off"></label>
+                  <label>Signature <input name="signature" placeholder="Override global..." autocomplete="off"></label>
+                  <label>Game code <input name="gameCode" placeholder="Override global..." autocomplete="off"></label>
+                </div>
+              </details>
               
               <div class="card">
                 <h3>Flow Payloads & Headers</h3>
@@ -129,6 +137,15 @@
 
           <section id="lobby-panel" class="panel">
             <form id="lobby-form" class="flow-form">
+              <details class="card local-overrides mb-4">
+                <summary><h3>🔧 Local Overrides (Target Environment)</h3></summary>
+                <div class="control-grid mt-4">
+                  <label>API domain <input name="apiDomain" placeholder="Override global..." autocomplete="off"></label>
+                  <label>Signature <input name="signature" placeholder="Override global..." autocomplete="off"></label>
+                  <label>Game code <input name="gameCode" placeholder="Override global..." autocomplete="off"></label>
+                </div>
+              </details>
+
               <div class="card">
                 <h3>Flow Payloads & Headers</h3>
                 <div class="step-group">
@@ -176,6 +193,16 @@
                   <label class="toggle-row"><span>Is Maintenance?</span><input name="isMaintenance" type="checkbox"></label>
                 </div>
               </div>
+
+              <details class="card local-overrides mb-4">
+                <summary><h3>🔧 Local Overrides (Target Environment)</h3></summary>
+                <div class="control-grid mt-4">
+                  <label>API domain <input name="apiDomain" placeholder="Override global..." autocomplete="off"></label>
+                  <label>Signature <input name="signature" placeholder="Override global..." autocomplete="off"></label>
+                  <label>Game code <input name="gameCode" placeholder="Override global..." autocomplete="off"></label>
+                </div>
+              </details>
+
               <div class="card">
                 <h3>Flow Payloads & Headers</h3>
                 <div class="step-group">

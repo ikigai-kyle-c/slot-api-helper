@@ -24,7 +24,6 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter,
 h1, h2, h3, p { margin: 0; }
 h1 { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
 h3 { font-size: 13px; font-weight: 700; color: var(--muted); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
-.topbar p { margin-top: 2px; color: var(--muted); font-size: 12px; }
 .topbar-actions { display: flex; gap: 16px; align-items: center; }
 .text-xs { font-size: 12px; color: var(--muted); }
 .mt-4 { margin-top: 16px; }
@@ -33,7 +32,7 @@ h3 { font-size: 13px; font-weight: 700; color: var(--muted); margin-bottom: 12px
 .flex-between { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
 .border-none { border-bottom: none !important; }
 
-/* Backend URL Widget */
+/* Backend URL Widget HUD */
 .backend-env-widget { background: var(--panel); border: 1px solid var(--line); padding: 8px 16px; border-radius: 8px; flex: 1; max-width: 500px; display: flex; flex-direction: column; gap: 8px; }
 .backend-tabs { display: flex; gap: 8px; }
 .env-pill { cursor: pointer; }
@@ -46,6 +45,12 @@ h3 { font-size: 13px; font-weight: 700; color: var(--muted); margin-bottom: 12px
 .health-status.checking { color: var(--warning); }
 .health-status.reachable { color: var(--success); }
 .health-status.unreachable { color: var(--danger); }
+
+/* Signature and GameCode inner row */
+.backend-params-row { display: flex; gap: 12px; margin-top: 4px; border-top: 1px solid var(--line); padding-top: 8px; }
+.backend-params-row label { flex: 1; gap: 4px; font-size: 10px; color: var(--muted); text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; display: flex; flex-direction: column; }
+.backend-params-row input { background: rgba(0,0,0,0.2); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; color: var(--text); font-family: ui-monospace, monospace; font-size: 12px; }
+.backend-params-row input:focus { border-color: var(--accent); outline: none; }
 
 .btn-settings { background: #334155; border: 1px solid var(--line); color: white; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
 .btn-settings:hover { background: #475569; }
@@ -124,6 +129,13 @@ pre { margin: 0; padding: 16px; color: #e2e8f0; font-family: ui-monospace, monos
 .process-info { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; }
 .btn-run { background: #334155; color: white; border: none; padding: 6px; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer; }
 .btn-run:hover { background: var(--accent); }
+
+details.local-overrides { cursor: pointer; transition: all 0.2s ease; }
+details.local-overrides summary { list-style: none; outline: none; }
+details.local-overrides summary::-webkit-details-marker { display: none; }
+details.local-overrides summary h3 { display: inline-block; margin: 0; color: var(--muted); transition: color 0.2s ease; }
+details.local-overrides summary:hover h3 { color: var(--accent); }
+details.local-overrides[open] summary h3 { color: var(--text); margin-bottom: 8px; }
 
 @media (max-width: 1024px) {
   body { overflow: auto; height: auto; }

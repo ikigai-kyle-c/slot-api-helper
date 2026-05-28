@@ -18,6 +18,8 @@ export default [
       "no-unused-vars": "warn",
       "no-undef": "error",
       "no-useless-assignment": "off",
+      // Add this line to allow empty catch blocks:
+      "no-empty": ["error", { "allowEmptyCatch": true }]
     },
   },
   {
