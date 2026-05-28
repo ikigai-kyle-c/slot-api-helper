@@ -6,7 +6,9 @@
   "directories": {
     "test": "tests"
   },
-  "scripts": {
+ "scripts": {
+    "start": "bun run src/ApiTestWeb/server.js",
+    "dev": "bun run --watch src/ApiTestWeb/server.js",
     "lint": "bun run type:check && bun run prettier:check && bun run lint:code",
     "lint:fix": "bun run prettier:fix && bun run lint:code --fix",
     "type:check": "tsc --noEmit",

@@ -7,139 +7,211 @@
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
+    <div id="settings-modal" class="modal-overlay">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>⚙️ Console Settings & Orchestrator</h2>
+          <button type="button" class="modal-close" id="btn-close-settings">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="card mb-4">
+            <h3>Local Server Paths (Absolute Paths)</h3>
+            <div class="control-grid">
+              <label>Money Service <input id="path-money" placeholder="/path/to/moneyservice" autocomplete="off"></label>
+              <label>Queue Service <input id="path-queue" placeholder="/path/to/queueservice" autocomplete="off"></label>
+              <label>API Hub <input id="path-apihub" placeholder="/path/to/apihub" autocomplete="off"></label>
+              <label>Slot Game Server <input id="path-slot" placeholder="/path/to/slot-game-server" autocomplete="off"></label>
+              <label>Remote Game Server <input id="path-remote" placeholder="/path/to/remote-game-server" autocomplete="off"></label>
+            </div>
+          </div>
+
+          <div class="card mb-4">
+            <div class="flex-between">
+              <h3>Server Orchestrator</h3>
+              <div class="restart-policy">
+                <label><input type="radio" name="restartPolicy" value="ignore" checked> Ignore if running</label>
+                <label><input type="radio" name="restartPolicy" value="kill"> Kill & Restart</label>
+              </div>
+            </div>
+            <button class="primary btn-large mt-4" style="background: #10b981;" onclick="deployAll()">🚀 MASTER ALL-IN-ONE DEPLOY</button>
+            <div class="process-grid mt-4">
+              <div class="process-item"><div class="process-info"><span>Money Service</span></div><button class="btn-run" onclick="runProcess('money')">Docker Up</button></div>
+              <div class="process-item"><div class="process-info"><span>Queue Service</span></div><button class="btn-run" onclick="runProcess('queue')">Docker Up</button></div>
+              <div class="process-item"><div class="process-info"><span>API Hub</span></div><button class="btn-run" onclick="runProcess('apihub')">Docker & Build</button></div>
+              <div class="process-item"><div class="process-info"><span>Remote Server</span></div><button class="btn-run" onclick="runProcess('remote')">Build & Start</button></div>
+              <div class="process-item"><div class="process-info"><span>Slot Server</span></div><button class="btn-run" onclick="runProcess('slot')">Build & Start</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <main class="app-shell">
       <header class="topbar">
-        <div>
-          <h1>API Test Console</h1>
-          <p>Internal maintenance and RGS play flow runner</p>
+        <div class="topbar-left">
+          <h1>API Console</h1>
         </div>
-        <div id="status" class="status badge idle">Idle</div>
+
+        <div class="backend-env-widget">
+          <div class="backend-tabs">
+            <label class="env-pill"><input type="radio" name="envType" value="LOCAL" checked><span>LOCALHOST</span></label>
+            <label class="env-pill"><input type="radio" name="envType" value="CIT"><span>CIT</span></label>
+            <label class="env-pill"><input type="radio" name="envType" value="QAT"><span>QAT</span></label>
+          </div>
+          <div class="backend-input-row">
+            <input type="text" id="global-domain" name="apiDomain" placeholder="http://localhost:19080" autocomplete="off">
+            <div id="healthcheck-status" class="health-status">Checking...</div>
+          </div>
+        </div>
+
+        <div class="topbar-actions">
+          <button id="btn-open-settings" class="btn-settings">⚙️ Local Deploy</button>
+          <div id="status" class="status badge idle">Idle</div>
+        </div>
       </header>
 
       <nav class="tabs" aria-label="Flow tabs">
-        <button class="tab is-active" data-tab="bet" type="button">RGS Bet Flow</button>
-        <button class="tab" data-tab="lobby" type="button">RGS Lobby Flow</button>
-        <button class="tab" data-tab="maintenance" type="button">Maintenance Control</button>
+        <button class="tab is-active" data-tab="bet" type="button">🎰 RGS Bet Flow</button>
+        <button class="tab" data-tab="lobby" type="button">🏠 RGS Lobby Flow</button>
+        <button class="tab" data-tab="maintenance" type="button">🛡️ Maintenance</button>
       </nav>
 
       <div class="content-layout">
-        <div class="controls-column">
+        <div class="controls-column scrollable">
           <section id="bet-panel" class="panel is-active">
             <form id="bet-form" class="flow-form">
+              <div class="card mb-4 control-grid">
+                <label>Signature <input id="global-signature" name="signature" autocomplete="off" placeholder="rgs-local-signature"></label>
+                <label>Game Code <input id="global-gamecode" name="gameCode" autocomplete="off" placeholder="LGS-006"></label>
+              </div>
+              
               <div class="card">
-                <h3>Target Environment</h3>
-                <div class="control-grid">
-                  <label>API domain <input name="apiDomain" autocomplete="off"></label>
-                  <label>Signature <input name="signature" autocomplete="off"></label>
-                  <label>Game code <input name="gameCode" autocomplete="off"></label>
+                <h3>Flow Payloads & Headers</h3>
+                <div class="step-group">
+                  <div class="step-title">1. Session Start</div>
+                  <div class="control-grid json-grid">
+                    <label class="json-field">Headers <textarea name="sessionStartHeadersJson" placeholder='{"x-signature":"rgs-local-signature"}'></textarea></label>
+                    <label class="json-field">Body <textarea name="sessionStartBodyJson" placeholder='{"gameCode":"LGS-006","lang":"en"}'></textarea></label>
+                  </div>
+                </div>
+                <div class="step-group">
+                  <div class="step-title">2. Session Activate</div>
+                  <div class="control-grid json-grid">
+                    <label class="json-field">Headers <textarea name="sessionActivateHeadersJson" placeholder='{"content-type":"application/json"}'></textarea></label>
+                    <label class="json-field">Body <textarea name="sessionActivateBodyJson" placeholder='{"token":"...","ts":0}'></textarea></label>
+                  </div>
+                </div>
+                <div class="step-group">
+                  <div class="step-title">3. Play Bet</div>
+                  <div class="control-grid json-grid">
+                    <label class="json-field">Headers <textarea name="betHeadersJson" placeholder='{"cloudfront-viewer-country":"JP"}'></textarea></label>
+                    <label class="json-field">Body <textarea name="betBodyJson" placeholder='{"session":"...","bet":{"type":"regular","value":"2"}}'></textarea></label>
+                  </div>
+                </div>
+                <div class="step-group">
+                  <div class="step-title">4. Play Action</div>
+                  <div class="control-grid json-grid">
+                    <label class="json-field">Headers <textarea name="actionHeadersJson" placeholder='{"cloudfront-viewer-country":"JP"}'></textarea></label>
+                    <label class="json-field">Body <textarea name="actionBodyJson" placeholder='{"session":"...","roundId":"...","action":1,"ts":0}'></textarea></label>
+                  </div>
+                </div>
+                <div class="step-group">
+                  <div class="step-title">5. Play Finish</div>
+                  <div class="control-grid json-grid">
+                    <label class="json-field">Headers <textarea name="finishHeadersJson" placeholder='{"cloudfront-viewer-country":"JP"}'></textarea></label>
+                    <label class="json-field">Body <textarea name="finishBodyJson" placeholder='{"session":"...","roundId":"...","ts":0}'></textarea></label>
+                  </div>
                 </div>
               </div>
-              <div class="card">
-                <h3>Payloads & Headers</h3>
-                <div class="control-grid json-grid">
-                  <label class="json-field">Session Start Headers <textarea name="sessionStartHeadersJson"></textarea></label>
-                  <label class="json-field">Session Start Body <textarea name="sessionStartBodyJson"></textarea></label>
-                  <label class="json-field">Activate Headers <textarea name="sessionActivateHeadersJson"></textarea></label>
-                  <label class="json-field">Activate Body <textarea name="sessionActivateBodyJson"></textarea></label>
-                  <label class="json-field">Bet Headers <textarea name="betHeadersJson"></textarea></label>
-                  <label class="json-field">Bet Body <textarea name="betBodyJson"></textarea></label>
-                  <label class="json-field">Action Headers <textarea name="actionHeadersJson"></textarea></label>
-                  <label class="json-field">Action Body <textarea name="actionBodyJson"></textarea></label>
-                  <label class="json-field">Finish Headers <textarea name="finishHeadersJson"></textarea></label>
-                  <label class="json-field">Finish Body <textarea name="finishBodyJson"></textarea></label>
-                </div>
-              </div>
-              <div class="form-actions">
-                <button class="primary btn-large" type="submit">🚀 Execute Bet Flow</button>
-              </div>
+              <div class="form-actions"><button class="primary btn-large" type="submit">🚀 Execute Bet Flow</button></div>
             </form>
           </section>
 
           <section id="lobby-panel" class="panel">
             <form id="lobby-form" class="flow-form">
               <div class="card">
-                <h3>Target Environment</h3>
-                <div class="control-grid">
-                  <label>API domain <input name="apiDomain" autocomplete="off"></label>
-                  <label>Signature <input name="signature" autocomplete="off"></label>
-                  <label>Game code <input name="gameCode" autocomplete="off"></label>
+                <h3>Flow Payloads & Headers</h3>
+                <div class="step-group">
+                  <div class="step-title">1. Session Start</div>
+                  <div class="control-grid json-grid">
+                    <label class="json-field">Headers <textarea name="sessionStartHeadersJson" placeholder='{"x-signature":"rgs-local-signature"}'></textarea></label>
+                    <label class="json-field">Body <textarea name="sessionStartBodyJson" placeholder='{"gameCode":"LGS-006","lang":"en"}'></textarea></label>
+                  </div>
+                </div>
+                <div class="step-group">
+                  <div class="step-title">2. Session Activate</div>
+                  <div class="control-grid json-grid">
+                    <label class="json-field">Headers <textarea name="sessionActivateHeadersJson" placeholder='{"content-type":"application/json"}'></textarea></label>
+                    <label class="json-field">Body <textarea name="sessionActivateBodyJson" placeholder='{"token":"...","ts":0}'></textarea></label>
+                  </div>
+                </div>
+                <div class="step-group">
+                  <div class="step-title">3. Token Activate</div>
+                  <div class="control-grid json-grid">
+                    <label class="json-field">Headers <textarea name="tokenActivateHeadersJson" placeholder='{"authorization":"Bearer ..."}'></textarea></label>
+                    <label class="json-field">Body <textarea name="tokenActivateBodyJson" placeholder='{}'></textarea></label>
+                  </div>
+                </div>
+                <div class="step-group">
+                  <div class="step-title">4. Token Refresh</div>
+                  <div class="control-grid json-grid">
+                    <label class="json-field">Headers <textarea name="tokenRefreshHeadersJson" placeholder='{"authorization":"Bearer ..."}'></textarea></label>
+                    <label class="json-field">Body <textarea name="tokenRefreshBodyJson" placeholder='{"refreshToken":"..."}'></textarea></label>
+                  </div>
                 </div>
               </div>
-              <div class="card">
-                <h3>Payloads & Headers</h3>
-                <div class="control-grid json-grid">
-                  <label class="json-field">Session Start Headers <textarea name="sessionStartHeadersJson"></textarea></label>
-                  <label class="json-field">Session Start Body <textarea name="sessionStartBodyJson"></textarea></label>
-                  <label class="json-field">Activate Headers <textarea name="sessionActivateHeadersJson"></textarea></label>
-                  <label class="json-field">Activate Body <textarea name="sessionActivateBodyJson"></textarea></label>
-                  <label class="json-field">Token Activate Headers <textarea name="tokenActivateHeadersJson"></textarea></label>
-                  <label class="json-field">Token Activate Body <textarea name="tokenActivateBodyJson"></textarea></label>
-                  <label class="json-field">Token Refresh Headers <textarea name="tokenRefreshHeadersJson"></textarea></label>
-                  <label class="json-field">Token Refresh Body <textarea name="tokenRefreshBodyJson"></textarea></label>
-                </div>
-              </div>
-              <div class="form-actions">
-                <button class="primary btn-large" type="submit">🚀 Execute Lobby Flow</button>
-              </div>
+              <div class="form-actions"><button class="primary btn-large" type="submit">🚀 Execute Lobby Flow</button></div>
             </form>
           </section>
 
           <section id="maintenance-panel" class="panel">
             <form id="maintenance-form" class="flow-form">
-              <div class="card">
+              <div class="card mb-4">
                 <h3>Admin Target</h3>
                 <div class="control-grid maintenance-grid">
-                  <label>API domain <input name="apiDomain" autocomplete="off"></label>
-                  <label>Signature <input name="signature" autocomplete="off"></label>
-                  <label>Game code <input name="gameCode" autocomplete="off"></label>
                   <label>User ID <input name="userId" autocomplete="off"></label>
                   <label>Account <input name="account" autocomplete="off"></label>
                   <label>Code <input name="code" autocomplete="off"></label>
                   <label>Route key <input name="routeKey" autocomplete="off"></label>
-                  <label class="toggle-row">
-                    <span>Is Maintenance?</span>
-                    <input name="isMaintenance" type="checkbox">
-                  </label>
+                  <label class="toggle-row"><span>Is Maintenance?</span><input name="isMaintenance" type="checkbox"></label>
                 </div>
               </div>
               <div class="card">
-                <h3>Payloads & Headers</h3>
-                <div class="control-grid json-grid">
-                  <label class="json-field">AM Token Headers <textarea name="amTokenHeadersJson"></textarea></label>
-                  <label class="json-field">AM Token Body <textarea name="amTokenBodyJson"></textarea></label>
-                  <label class="json-field">Maintenance Headers <textarea name="maintenanceHeadersJson"></textarea></label>
-                  <label class="json-field">Maintenance Body <textarea name="maintenanceBodyJson"></textarea></label>
+                <h3>Flow Payloads & Headers</h3>
+                <div class="step-group">
+                  <div class="step-title">1. AM Token Request</div>
+                  <div class="control-grid json-grid">
+                    <label class="json-field">Headers <textarea name="amTokenHeadersJson" placeholder='{"x-signature":"rgs-local-signature"}'></textarea></label>
+                    <label class="json-field">Body <textarea name="amTokenBodyJson" placeholder='{"userId":0,"account":"kyle.c","code":"SLT","permission":[{"routeKey":"V1_INTERNAL_GAME_MAINTENANCE","methods":["GET","POST","PUT","PATCH","DELETE","*"]}]}'></textarea></label>
+                  </div>
+                </div>
+                <div class="step-group">
+                  <div class="step-title">2. Maintenance Patch</div>
+                  <div class="control-grid json-grid">
+                    <label class="json-field">Headers <textarea name="maintenanceHeadersJson" placeholder='{"accept":"application/json"}'></textarea></label>
+                    <label class="json-field">Body <textarea name="maintenanceBodyJson" placeholder='{"isMaintenance":true}'></textarea></label>
+                  </div>
                 </div>
               </div>
-              <div class="form-actions">
-                <button class="primary btn-large" type="submit">🛡️ Run Maintenance Command</button>
-              </div>
+              <div class="form-actions"><button class="primary btn-large" type="submit">🛡️ Run Maintenance Command</button></div>
             </form>
           </section>
         </div>
 
-        <div class="workspace-column">
-          <div class="workspace">
-            <div class="output-panel">
-              <div class="section-title">
-                <h2>JSON Result</h2>
-                <span id="result-file" class="text-xs"></span>
-              </div>
-              <pre id="result-output">{}</pre>
+        <div class="workspace-column scrollable">
+          <div class="output-container card">
+            <div class="workspace-tabs">
+              <button type="button" class="ws-tab is-active" data-ws="result">JSON Result</button>
+              <button type="button" class="ws-tab" data-ws="trace">Trace Logs</button>
+              <span id="result-file" class="text-xs ml-auto"></span>
             </div>
-            <div class="output-panel">
-              <div class="section-title">
-                <h2>Flow Trace Logs</h2>
-              </div>
-              <pre id="trace-output">[]</pre>
+            <div class="workspace-content">
+              <div id="ws-result" class="ws-panel is-active"><pre id="result-output">{}</pre></div>
+              <div id="ws-trace" class="ws-panel"><pre id="trace-output">[]</pre></div>
             </div>
           </div>
-
           <section class="records-panel card mt-4">
-            <div class="section-title border-none">
-              <h2>Recent Executions</h2>
-              <span class="text-xs">Latest 10</span>
-            </div>
+            <div class="section-title border-none"><h2>Recent Executions</h2></div>
             <div id="records-list" class="records-list"></div>
           </section>
         </div>
