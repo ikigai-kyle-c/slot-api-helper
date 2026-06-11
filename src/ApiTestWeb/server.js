@@ -3,7 +3,6 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
-const { exec, execSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(ROOT, '..');
@@ -11,9 +10,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const RGS_DIR = path.join(ROOT, 'RGSBetFlow');
 const LOBBY_DIR = path.join(ROOT, 'RGSLobby');
 const MAINTENANCE_DIR = path.join(ROOT, 'InternalMaintenanceApi');
-const RGS_CACHE = path.join(RGS_DIR, '.token-cache.json');
-const LOBBY_CACHE = path.join(LOBBY_DIR, '.lobby-token-cache.json');
-const AM_CACHE = path.join(MAINTENANCE_DIR, '.am-token-cache.json');
+
 const RESULT_DIR = path.join(REPO_ROOT, 'result', 'bet');
 const TRACE_DIR = path.join(RESULT_DIR, '.traces');
 const LOBBY_RESULT_DIR = path.join(REPO_ROOT, 'result', 'lobby');
@@ -67,10 +64,7 @@ function parseJsonBody(req) {
       }
     });
     req.on('end', () => {
-      if (!body) {
-        resolve({});
-        return;
-      }
+      if (!body) return resolve({});
       try {
         resolve(JSON.parse(body));
       } catch {
@@ -99,41 +93,11 @@ async function requestJson({ method, url, headers = {}, body }) {
   return { status: response.status, ok: response.ok, body: getParsedBody() };
 }
 
-function isInvalidToken(status, body) {
-  const text = typeof body === 'string' ? body : JSON.stringify(body ?? {});
-  return status === 401 || /invalid|expired|unauthorized/i.test(text);
-}
-
-function jwtPayload(token) {
-  if (!token || typeof token !== 'string') return null;
-  const parts = token.split('.');
-  if (parts.length < 2) return null;
-  try {
-    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
-    return JSON.parse(Buffer.from(padded, 'base64').toString('utf8'));
-  } catch {
-    return null;
-  }
-}
-
-function tokenExpiresSoon(token, skewSeconds = 60) {
-  const exp = jwtPayload(token)?.exp;
-  if (!Number.isFinite(Number(exp))) return false;
-  return Number(exp) <= Math.floor(Date.now() / 1000) + skewSeconds;
-}
-
-function cacheMiss(reason) {
-  return { cache: null, reason };
-}
 function httpError(message, details, logs = null) {
   const error = new Error(message);
   error.details = details;
   error.logs = logs;
   return error;
-}
-function blockedLog(step, status, response) {
-  return { step: 'flow.blocked', blockedStep: step, status, response };
 }
 
 function detectMaintenanceBlock(step, status, body) {
@@ -156,6 +120,7 @@ function readJsonFile(filePath) {
     return null;
   }
 }
+
 function parseOptionalJson(value, fieldName) {
   if (value === undefined || value === null || String(value).trim() === '') return null;
   try {
@@ -164,31 +129,20 @@ function parseOptionalJson(value, fieldName) {
     throw new Error(`${fieldName} must be valid JSON.`);
   }
 }
+
 function objectOrNull(value, fieldName) {
   if (value === null) return null;
-  if (typeof value !== 'object' || Array.isArray(value)) {
+  if (typeof value !== 'object' || Array.isArray(value))
     throw new Error(`${fieldName} must be a JSON object.`);
-  }
   return value;
 }
+
 function optionalObjectJson(config, key, label) {
   return objectOrNull(parseOptionalJson(config[key], label), label);
 }
-function hasAnyConfig(config, keys) {
-  return keys.some((key) => String(config[key] || '').trim() !== '');
-}
+
 function prettyJson(value) {
   return JSON.stringify(value, null, 2);
-}
-function sameJson(value, expected) {
-  const parsed = parseOptionalJson(value, 'JSON');
-  return JSON.stringify(parsed) === JSON.stringify(expected);
-}
-function hasCustomJson(config, entries) {
-  return entries.some(([key, defaultValue]) => {
-    const raw = String(config[key] || '').trim();
-    return raw !== '' && !sameJson(raw, defaultValue);
-  });
 }
 
 function resolveTemplates(value, vars) {
@@ -256,19 +210,18 @@ function listRecords(flow = 'bet') {
     .slice(0, MAX_RESULT_FILES)
     .map((name) => {
       const filePath = path.join(config.resultDir, name);
-      const stat = fs.statSync(filePath);
       return {
         file: name,
         resultFile: path.relative(REPO_ROOT, filePath),
-        updatedAt: displayTimeFromDate(stat.mtime),
+        updatedAt: displayTimeFromDate(fs.statSync(filePath).mtime),
         hasTrace: fs.existsSync(path.join(config.traceDir, `${name}.trace.json`)),
       };
     });
 }
 
 function timestamp() {
-  const date = new Date();
-  const pad = (value) => String(value).padStart(2, '0');
+  const date = new Date(),
+    pad = (value) => String(value).padStart(2, '0');
   return [
     date.getFullYear(),
     pad(date.getMonth() + 1),
@@ -278,6 +231,7 @@ function timestamp() {
     pad(date.getSeconds()),
   ].join('');
 }
+
 function displayTime() {
   return displayTimeFromDate(new Date());
 }
@@ -290,121 +244,6 @@ function nowMs() {
 }
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-function rtpConfigCode(gameCode) {
-  return sessionStartPayload(gameCode).gameSetting.rtpConfigCode;
-}
-
-function sessionStartPayload(gameCode) {
-  return {
-    gameCode,
-    lang: 'en',
-    gameSetting: {
-      rtpConfigCode: gameCode === 'LGS-001' ? 'highRTP' : 'RTP_97',
-      isGeoBlocking: true,
-    },
-    country: 'GB',
-    isTestingPlayer: false,
-    mode: 'real',
-    operator: 'QARealGameOperator',
-    brand: 'QARealGameBrand',
-    playerId: 'QARealGameOperator:QARealGameBrand:kyle0c',
-    currency: 'EUR',
-    currencyId: 1,
-    externalPlayerId: 'kyle0c',
-    balance: '10000',
-    maxExposure: 0,
-    licenseConfig: {},
-    callback: 'https://httpbin.org/status/200', // <-- Safe mock URL
-  };
-}
-function sessionStartPayloadTemplate() {
-  return {
-    ...sessionStartPayload('$GAME_CODE'),
-    gameSetting: { rtpConfigCode: '$RTP_CONFIG_CODE', isGeoBlocking: true },
-  };
-}
-function sessionActivatePayloadTemplate() {
-  return {
-    token: '$SESSION_TOKEN',
-    ts: 0,
-    timezone: 'us',
-    analytics: {
-      language: 'us',
-      device: 'mobile',
-      resolution: { w: 0, h: 0 },
-      orientation: 'landscape',
-      connection: 'slow-2g',
-    },
-  };
-}
-function betPayload(sessionId) {
-  return {
-    session: sessionId || '',
-    bet: { type: 'regular', value: '2' },
-    stakeMode: { type: 'commonGame', multiplier: 1, name: 'regular bet', rtp: 96.56 },
-    ts: 177445520478,
-  };
-}
-function betPayloadTemplate() {
-  return betPayload('$SESSION_ID');
-}
-function actionPayloadTemplate() {
-  return { session: '$SESSION_ID', roundId: '$ROUND_ID', action: '$ACTION', ts: '$NOW_MS' };
-}
-function finishPayloadTemplate() {
-  return { session: '$SESSION_ID', roundId: '$ROUND_ID', ts: '$NOW_MS' };
-}
-function sessionStartHeadersTemplate(signature = '$SIGNATURE') {
-  return { 'x-signature': signature, 'content-type': 'application/json' };
-}
-function sessionActivateHeadersTemplate() {
-  return { 'content-type': 'application/json' };
-}
-function playHeadersTemplate() {
-  return {
-    'cloudfront-viewer-country': 'JP',
-    'cloudfront-viewer-address': '1.2.3.4',
-    'x-access-token': '$ACCESS_TOKEN',
-    authorization: 'Bearer $ACCESS_TOKEN',
-    'content-type': 'application/json',
-  };
-}
-function amTokenHeadersTemplate() {
-  return {
-    accept: 'application/json',
-    'x-signature': '$SIGNATURE',
-    'content-type': 'application/json',
-  };
-}
-function amTokenPayloadTemplate() {
-  return {
-    userId: '$USER_ID',
-    account: '$ACCOUNT',
-    code: '$CODE',
-    permission: [
-      { routeKey: '$ROUTE_KEY', methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', '*'] },
-    ],
-  };
-}
-function maintenanceHeadersTemplate() {
-  return {
-    accept: 'application/json',
-    'x-access-token': '$AM_TOKEN',
-    'content-type': 'application/json',
-  };
-}
-function maintenanceBodyTemplate() {
-  return { isMaintenance: '$IS_MAINTENANCE' };
-}
-function lobbyTokenActivateHeadersTemplate() {
-  return { authorization: 'Bearer $GAME_ACCESS_TOKEN' };
-}
-function lobbyTokenRefreshHeadersTemplate() {
-  return { authorization: 'Bearer $LOBBY_ACCESS_TOKEN', 'content-type': 'application/json' };
-}
-function lobbyTokenRefreshBodyTemplate() {
-  return { refreshToken: '$LOBBY_REFRESH_TOKEN' };
 }
 
 function extractLaunchToken(launchUrl) {
@@ -431,236 +270,6 @@ function extractAccessToken(body) {
   return body?.token || body?.accessToken || body?.data?.token || body?.data?.accessToken || '';
 }
 
-async function refreshRgsTokens(config, logs) {
-  const baseUrl = normalizeBaseUrl(config.apiDomain);
-  const startPayload = resolveTemplates(
-    optionalObjectJson(config, 'sessionStartBodyJson', 'Session start body JSON') ||
-      sessionStartPayload(config.gameCode),
-    {
-      GAME_CODE: config.gameCode,
-      RTP_CONFIG_CODE: rtpConfigCode(config.gameCode),
-      SIGNATURE: config.signature,
-    },
-  );
-  const startHeaders = {
-    'x-signature': config.signature,
-    'content-type': 'application/json',
-    ...resolveTemplates(
-      optionalObjectJson(config, 'sessionStartHeadersJson', 'Session start headers JSON') || {},
-      {
-        GAME_CODE: config.gameCode,
-        RTP_CONFIG_CODE: rtpConfigCode(config.gameCode),
-        SIGNATURE: config.signature,
-      },
-    ),
-  };
-  logs.push({ step: 'session.start.request', headers: startHeaders, payload: startPayload });
-  const start = await requestJson({
-    method: 'POST',
-    url: `${baseUrl}/v2/service/session/start`,
-    headers: startHeaders,
-    body: startPayload,
-  });
-  logs.push({ step: 'session.start.response', status: start.status, body: start.body });
-  const startMaintenanceBlock = detectMaintenanceBlock('session.start', start.status, start.body);
-  if (startMaintenanceBlock) {
-    logs.push({ step: 'maintenance.block', ...startMaintenanceBlock });
-    throw httpError(`MAINTENANCE BLOCKED`, startMaintenanceBlock, logs);
-  }
-  if (start.status !== 200)
-    throw httpError(
-      `Session start failed with HTTP ${start.status}.`,
-      { step: 'session.start', status: start.status, response: start.body },
-      logs,
-    );
-  const sessionToken = extractSessionToken(start.body);
-  const sessionId = extractSessionId(start.body);
-
-  const activatePayload = resolveTemplates(
-    optionalObjectJson(config, 'sessionActivateBodyJson', 'Session activate body JSON') ||
-      sessionActivatePayloadTemplate(),
-    { SESSION_TOKEN: sessionToken },
-  );
-  const activateHeaders = {
-    'content-type': 'application/json',
-    ...resolveTemplates(
-      optionalObjectJson(config, 'sessionActivateHeadersJson', 'Session activate headers JSON') ||
-        {},
-      { SESSION_TOKEN: sessionToken },
-    ),
-  };
-  logs.push({
-    step: 'session.activate.request',
-    headers: activateHeaders,
-    payload: activatePayload,
-  });
-  const activate = await requestJson({
-    method: 'POST',
-    url: `${baseUrl}/v2/exp/session/activate`,
-    headers: activateHeaders,
-    body: activatePayload,
-  });
-  logs.push({ step: 'session.activate.response', status: activate.status, body: activate.body });
-  const activateMaintenanceBlock = detectMaintenanceBlock(
-    'session.activate',
-    activate.status,
-    activate.body,
-  );
-  if (activateMaintenanceBlock) {
-    logs.push({ step: 'maintenance.block', ...activateMaintenanceBlock });
-    throw httpError(`MAINTENANCE BLOCKED`, activateMaintenanceBlock, logs);
-  }
-  if (activate.status !== 200)
-    throw httpError(
-      `Session activate failed`,
-      { step: 'session.activate', status: activate.status, response: activate.body },
-      logs,
-    );
-
-  const cache = {
-    baseUrl,
-    gameCode: config.gameCode,
-    sessionToken,
-    accessToken: extractAccessToken(activate.body),
-    sessionId,
-    savedAt: Date.now() / 1000,
-  };
-  writeJsonFile(RGS_CACHE, cache);
-  return cache;
-}
-
-function getRgsCache(config) {
-  const cache = readJsonFile(RGS_CACHE);
-  if (
-    !cache ||
-    cache.baseUrl !== normalizeBaseUrl(config.apiDomain) ||
-    cache.gameCode !== config.gameCode ||
-    !cache.accessToken ||
-    !cache.sessionToken ||
-    tokenExpiresSoon(cache.accessToken)
-  )
-    return cacheMiss('Invalid/Expired');
-  return { cache, reason: '' };
-}
-
-async function runLobbyFlow(input) {
-  const requestedAt = displayTime();
-  const config = {
-    apiDomain: input.apiDomain || 'localhost:19080',
-    signature: input.signature || 'rgs-local-signature',
-    gameCode: input.gameCode || 'LGS-006',
-    sessionStartHeadersJson: input.sessionStartHeadersJson || '',
-    sessionStartBodyJson: input.sessionStartBodyJson || '',
-    sessionActivateHeadersJson: input.sessionActivateHeadersJson || '',
-    sessionActivateBodyJson: input.sessionActivateBodyJson || '',
-    tokenActivateHeadersJson: input.tokenActivateHeadersJson || '',
-    tokenActivateBodyJson: input.tokenActivateBodyJson || '',
-    tokenRefreshHeadersJson: input.tokenRefreshHeadersJson || '',
-    tokenRefreshBodyJson: input.tokenRefreshBodyJson || '',
-  };
-  const baseUrl = normalizeBaseUrl(config.apiDomain);
-  const logs = [];
-  const rgsToken = await refreshRgsTokens(config, logs);
-  const tokenActivateVars = { GAME_ACCESS_TOKEN: rgsToken.accessToken };
-  const tokenActivateBodyRaw = parseOptionalJson(
-    config.tokenActivateBodyJson,
-    'Token activate body JSON',
-  );
-  const tokenActivateBody =
-    tokenActivateBodyRaw === null
-      ? null
-      : resolveTemplates(tokenActivateBodyRaw, tokenActivateVars);
-  const tokenActivateHeaders = {
-    authorization: `Bearer ${rgsToken.accessToken}`,
-    ...(tokenActivateBody === null ? {} : { 'content-type': 'application/json' }),
-    ...resolveTemplates(
-      optionalObjectJson(config, 'tokenActivateHeadersJson', 'Token activate headers JSON') || {},
-      tokenActivateVars,
-    ),
-  };
-
-  logs.push({
-    step: 'session-token.activate.request',
-    headers: tokenActivateHeaders,
-    payload: tokenActivateBody,
-  });
-  const activate = await requestJson({
-    method: 'POST',
-    url: `${baseUrl}/v1/exp/session-token/activate`,
-    headers: tokenActivateHeaders,
-    body: tokenActivateBody === null ? undefined : tokenActivateBody,
-  });
-  logs.push({
-    step: 'session-token.activate.response',
-    status: activate.status,
-    body: activate.body,
-  });
-  if (activate.status !== 200)
-    throw httpError(
-      `Session-token activate failed`,
-      { step: 'session-token.activate', status: activate.status, response: activate.body },
-      logs,
-    );
-
-  const lobbyAccessToken = activate.body?.data?.accessToken || '';
-  const lobbyRefreshToken = activate.body?.data?.refreshToken || '';
-  const tokenRefreshVars = {
-    LOBBY_ACCESS_TOKEN: lobbyAccessToken,
-    LOBBY_REFRESH_TOKEN: lobbyRefreshToken,
-    NOW_MS: nowMs(),
-  };
-  const refreshPayload = resolveTemplates(
-    objectOrNull(
-      parseOptionalJson(config.tokenRefreshBodyJson, 'Token refresh body JSON'),
-      'Token refresh body JSON',
-    ) || { refreshToken: lobbyRefreshToken },
-    tokenRefreshVars,
-  );
-  const refreshHeaders = {
-    authorization: `Bearer ${lobbyAccessToken}`,
-    'content-type': 'application/json',
-    ...resolveTemplates(
-      optionalObjectJson(config, 'tokenRefreshHeadersJson', 'Token refresh headers JSON') || {},
-      tokenRefreshVars,
-    ),
-  };
-
-  await delay(5000);
-  const refresh = await requestJson({
-    method: 'POST',
-    url: `${baseUrl}/v1/exp/session-token/refresh`,
-    headers: refreshHeaders,
-    body: refreshPayload,
-  });
-  logs.push({ step: 'session-token.refresh.response', status: refresh.status, body: refresh.body });
-  if (refresh.status !== 200)
-    throw httpError(
-      `Refresh failed`,
-      { step: 'session-token.refresh', status: refresh.status, response: refresh.body },
-      logs,
-    );
-  const result = {
-    rgsSession: rgsToken,
-    sessionTokenActivate: activate.body,
-    sessionTokenRefresh: refresh.body,
-  };
-  return {
-    result,
-    logs,
-    resultFile: saveFlowResult('lobby', config.gameCode, result, logs),
-    requestedAt,
-    respondedAt: displayTime(),
-  };
-}
-
-function saveRgsResult(config, result, logs = []) {
-  const filename = `${timestamp()}-bet-${config.gameCode}.json`;
-  writeJsonFile(path.join(recordConfig('bet').resultDir, filename), result);
-  writeJsonFile(path.join(recordConfig('bet').traceDir, `${filename}.trace.json`), logs);
-  cleanupOldResults('bet');
-  return path.relative(REPO_ROOT, path.join(recordConfig('bet').resultDir, filename));
-}
-
 function saveFlowResult(flow, suffixValue, result, logs = []) {
   const config = recordConfig(flow);
   const filename = `${timestamp()}-${config.suffix}-${suffixValue || 'result'}.json`;
@@ -670,31 +279,9 @@ function saveFlowResult(flow, suffixValue, result, logs = []) {
   return path.relative(REPO_ROOT, path.join(config.resultDir, filename));
 }
 
-function playHeaders(accessToken) {
-  return {
-    'cloudfront-viewer-country': 'JP',
-    'cloudfront-viewer-address': '1.2.3.4',
-    'x-access-token': accessToken,
-    authorization: `Bearer ${accessToken}`,
-    'content-type': 'application/json',
-  };
-}
-
-function extractActionValue(body) {
-  if (body?.data?.action !== undefined && body.data.action !== null) return body.data.action;
-  const actions = body?.data?.actions;
-  if (!Array.isArray(actions) || actions.length === 0) return undefined;
-  const first = actions[0];
-  if (first && typeof first === 'object' && first.action !== undefined) return first.action;
-  return first;
-}
-
-function extractSummaryCoins(body) {
-  const raw = body?.data?.results?.gameResponse?.step?.summary?.coins;
-  if (raw === undefined || raw === null || raw === '') return null;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
-}
+// -------------------------------------------------------------
+// FLOW RUNNERS (Stateless)
+// -------------------------------------------------------------
 
 async function runBetFlow(input) {
   const requestedAt = displayTime();
@@ -715,28 +302,95 @@ async function runBetFlow(input) {
   };
   const baseUrl = normalizeBaseUrl(config.apiDomain);
   const logs = [];
-  const hasCustomTokenRequest = hasCustomJson(config, [
-    ['sessionStartHeadersJson', sessionStartHeadersTemplate()],
-    ['sessionStartBodyJson', sessionStartPayloadTemplate()],
-    ['sessionActivateHeadersJson', sessionActivateHeadersTemplate()],
-    ['sessionActivateBodyJson', sessionActivatePayloadTemplate()],
-  ]);
-  let cache = hasCustomTokenRequest ? null : getRgsCache(config).cache;
-  if (!cache) cache = await refreshRgsTokens(config, logs);
+  const result = {};
 
-  async function sendBet() {
-    const vars = { ACCESS_TOKEN: cache.accessToken, SESSION_ID: cache.sessionId, NOW_MS: nowMs() };
-    const payload = resolveTemplates(
-      optionalObjectJson(config, 'betBodyJson', 'Bet body JSON') || betPayload(cache.sessionId),
-      vars,
-    );
+  // State provided by UI IDE Context
+  const state = typeof input.state === 'object' && input.state ? input.state : {};
+  const steps = Array.isArray(input.steps)
+    ? input.steps
+    : ['start', 'activate', 'bet', 'action', 'finish'];
+
+  const vars = () => ({
+    ...state,
+    GAME_CODE: config.gameCode,
+    RTP_CONFIG_CODE: config.gameCode === 'LGS-001' ? 'highRTP' : 'RTP_97',
+    SIGNATURE: config.signature,
+    NOW_MS: nowMs(),
+  });
+
+  if (steps.includes('start')) {
     const headers = {
-      ...playHeaders(cache.accessToken),
+      'x-signature': config.signature,
+      'content-type': 'application/json',
       ...resolveTemplates(
-        optionalObjectJson(config, 'betHeadersJson', 'Bet headers JSON') || {},
-        vars,
+        optionalObjectJson(config, 'sessionStartHeadersJson', 'Start Headers') || {},
+        vars(),
       ),
     };
+    const payload = resolveTemplates(
+      optionalObjectJson(config, 'sessionStartBodyJson', 'Start Body') || {},
+      vars(),
+    );
+    logs.push({ step: 'session.start.request', headers, payload });
+    const res = await requestJson({
+      method: 'POST',
+      url: `${baseUrl}/v2/service/session/start`,
+      headers,
+      body: payload,
+    });
+    logs.push({ step: 'session.start.response', status: res.status, body: res.body });
+    const block = detectMaintenanceBlock('session.start', res.status, res.body);
+    if (block) throw httpError(`MAINTENANCE BLOCKED`, block, logs);
+    if (res.status !== 200)
+      throw httpError(`Start failed`, { status: res.status, response: res.body }, logs);
+
+    state.SESSION_TOKEN = extractSessionToken(res.body) || state.SESSION_TOKEN;
+    state.SESSION_ID = extractSessionId(res.body) || state.SESSION_ID;
+    result.start = res.body;
+  }
+
+  if (steps.includes('activate')) {
+    const headers = {
+      'content-type': 'application/json',
+      ...resolveTemplates(
+        optionalObjectJson(config, 'sessionActivateHeadersJson', 'Activate Headers') || {},
+        vars(),
+      ),
+    };
+    const payload = resolveTemplates(
+      optionalObjectJson(config, 'sessionActivateBodyJson', 'Activate Body') || {},
+      vars(),
+    );
+    logs.push({ step: 'session.activate.request', headers, payload });
+    const res = await requestJson({
+      method: 'POST',
+      url: `${baseUrl}/v2/exp/session/activate`,
+      headers,
+      body: payload,
+    });
+    logs.push({ step: 'session.activate.response', status: res.status, body: res.body });
+    const block = detectMaintenanceBlock('session.activate', res.status, res.body);
+    if (block) throw httpError(`MAINTENANCE BLOCKED`, block, logs);
+    if (res.status !== 200)
+      throw httpError(`Activate failed`, { status: res.status, response: res.body }, logs);
+
+    state.ACCESS_TOKEN = extractAccessToken(res.body) || state.ACCESS_TOKEN;
+    if (!state.SESSION_ID) state.SESSION_ID = extractSessionId(res.body) || state.SESSION_ID;
+    result.activate = res.body;
+  }
+
+  if (steps.includes('bet')) {
+    const headers = {
+      'content-type': 'application/json',
+      ...resolveTemplates(
+        optionalObjectJson(config, 'betHeadersJson', 'Bet Headers') || {},
+        vars(),
+      ),
+    };
+    const payload = resolveTemplates(
+      optionalObjectJson(config, 'betBodyJson', 'Bet Body') || {},
+      vars(),
+    );
     logs.push({ step: 'play.bet.request', headers, payload });
     const res = await requestJson({
       method: 'POST',
@@ -745,195 +399,225 @@ async function runBetFlow(input) {
       body: payload,
     });
     logs.push({ step: 'play.bet.response', status: res.status, body: res.body });
-    return res;
+    const block = detectMaintenanceBlock('play.bet', res.status, res.body);
+    if (block) throw httpError(`MAINTENANCE BLOCKED`, block, logs);
+    if (res.status !== 200)
+      throw httpError(`Bet failed`, { status: res.status, response: res.body }, logs);
+
+    state.ROUND_ID = res.body?.data?.roundId || state.ROUND_ID;
+    const actionVal =
+      res.body?.data?.action ??
+      res.body?.data?.actions?.[0]?.action ??
+      res.body?.data?.actions?.[0];
+    if (actionVal !== undefined) state.ACTION = actionVal;
+    result.bet = res.body;
   }
 
-  let bet = await sendBet();
-  if (isInvalidToken(bet.status, bet.body)) {
-    cache = await refreshRgsTokens(config, logs);
-    bet = await sendBet();
-  }
-  if (bet.status !== 200)
-    throw httpError(
-      `Bet failed`,
-      { step: 'play.bet', status: bet.status, response: bet.body },
-      logs,
-    );
-
-  const result = { bet: bet.body };
-  const action = extractActionValue(bet.body);
-  if (action !== undefined && action !== null && action !== '') {
-    const actionVars = {
-      ACCESS_TOKEN: cache.accessToken,
-      SESSION_ID: cache.sessionId || '',
-      ROUND_ID: bet.body?.data?.roundId || '',
-      ACTION: action,
-      NOW_MS: nowMs(),
-    };
-    const actionPayload = resolveTemplates(
-      optionalObjectJson(config, 'actionBodyJson', 'Action body JSON') || {
-        session: cache.sessionId || '',
-        roundId: bet.body?.data?.roundId || '',
-        action,
-        ts: nowMs(),
-      },
-      actionVars,
-    );
-    const actionHeaders = {
-      ...playHeaders(cache.accessToken),
-      ...resolveTemplates(
-        optionalObjectJson(config, 'actionHeadersJson', 'Action headers JSON') || {},
-        actionVars,
-      ),
-    };
-    logs.push({ step: 'play.action.request', headers: actionHeaders, payload: actionPayload });
-    const actionResponse = await requestJson({
-      method: 'POST',
-      url: `${baseUrl}/v2/exp/play/action`,
-      headers: actionHeaders,
-      body: actionPayload,
-    });
-    logs.push({
-      step: 'play.action.response',
-      status: actionResponse.status,
-      body: actionResponse.body,
-    });
-    result.action = actionResponse.body;
-    if (actionResponse.status !== 200)
-      throw httpError(
-        `Action failed`,
-        { step: 'play.action', status: actionResponse.status, response: actionResponse.body },
-        logs,
+  if (steps.includes('action')) {
+    if (state.ACTION !== undefined) {
+      const headers = {
+        'content-type': 'application/json',
+        ...resolveTemplates(
+          optionalObjectJson(config, 'actionHeadersJson', 'Action Headers') || {},
+          vars(),
+        ),
+      };
+      const payload = resolveTemplates(
+        optionalObjectJson(config, 'actionBodyJson', 'Action Body') || {},
+        vars(),
       );
+      logs.push({ step: 'play.action.request', headers, payload });
+      const res = await requestJson({
+        method: 'POST',
+        url: `${baseUrl}/v2/exp/play/action`,
+        headers,
+        body: payload,
+      });
+      logs.push({ step: 'play.action.response', status: res.status, body: res.body });
+      if (res.status !== 200)
+        throw httpError(`Action failed`, { status: res.status, response: res.body }, logs);
+      result.action = res.body;
+    }
   }
 
-  const lastPlay = result.action || result.bet;
-  const coins = extractSummaryCoins(lastPlay);
-  if (coins !== null && coins > 0) {
-    const finishVars = {
-      ACCESS_TOKEN: cache.accessToken,
-      SESSION_ID: cache.sessionId || '',
-      ROUND_ID: lastPlay?.data?.roundId || '',
-      NOW_MS: nowMs(),
-    };
-    const finishPayload = resolveTemplates(
-      optionalObjectJson(config, 'finishBodyJson', 'Finish body JSON') || {
-        session: cache.sessionId || '',
-        roundId: lastPlay?.data?.roundId || '',
-        ts: nowMs(),
-      },
-      finishVars,
-    );
-    const finishHeaders = {
-      ...playHeaders(cache.accessToken),
+  if (steps.includes('finish')) {
+    const headers = {
+      'content-type': 'application/json',
       ...resolveTemplates(
-        optionalObjectJson(config, 'finishHeadersJson', 'Finish headers JSON') || {},
-        finishVars,
+        optionalObjectJson(config, 'finishHeadersJson', 'Finish Headers') || {},
+        vars(),
       ),
     };
-    logs.push({ step: 'play.finish.request', headers: finishHeaders, payload: finishPayload });
-    const finish = await requestJson({
+    const payload = resolveTemplates(
+      optionalObjectJson(config, 'finishBodyJson', 'Finish Body') || {},
+      vars(),
+    );
+    logs.push({ step: 'play.finish.request', headers, payload });
+    const res = await requestJson({
       method: 'POST',
       url: `${baseUrl}/v2/exp/play/finish`,
-      headers: finishHeaders,
-      body: finishPayload,
+      headers,
+      body: payload,
     });
-    logs.push({ step: 'play.finish.response', status: finish.status, body: finish.body });
-    result.finish = finish.body;
-    if (finish.status !== 200)
-      throw httpError(
-        `Finish failed`,
-        { step: 'play.finish', status: finish.status, response: finish.body },
-        logs,
-      );
+    logs.push({ step: 'play.finish.response', status: res.status, body: res.body });
+    if (res.status !== 200)
+      throw httpError(`Finish failed`, { status: res.status, response: res.body }, logs);
+    result.finish = res.body;
   }
 
   return {
     result,
+    state,
     logs,
-    resultFile: saveRgsResult(config, result, logs),
+    resultFile: saveFlowResult('bet', config.gameCode, result, logs),
     requestedAt,
     respondedAt: displayTime(),
   };
 }
 
-function amTokenPayload(config) {
-  return {
-    userId: Number(config.userId),
-    account: config.account,
-    code: config.code,
-    permission: [
-      { routeKey: config.routeKey, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', '*'] },
-    ],
+async function runLobbyFlow(input) {
+  const requestedAt = displayTime();
+  const config = {
+    apiDomain: input.apiDomain || 'localhost:19080',
+    signature: input.signature || 'rgs-local-signature',
+    gameCode: input.gameCode || 'LGS-006',
+    sessionStartHeadersJson: input.sessionStartHeadersJson || '',
+    sessionStartBodyJson: input.sessionStartBodyJson || '',
+    sessionActivateHeadersJson: input.sessionActivateHeadersJson || '',
+    sessionActivateBodyJson: input.sessionActivateBodyJson || '',
+    tokenActivateHeadersJson: input.tokenActivateHeadersJson || '',
+    tokenActivateBodyJson: input.tokenActivateBodyJson || '',
+    tokenRefreshHeadersJson: input.tokenRefreshHeadersJson || '',
+    tokenRefreshBodyJson: input.tokenRefreshBodyJson || '',
   };
-}
-
-function getAmCache(config) {
-  const cache = readJsonFile(AM_CACHE);
-  if (
-    !cache ||
-    cache.baseUrl !== normalizeBaseUrl(config.apiDomain) ||
-    cache.account !== config.account ||
-    cache.code !== config.code ||
-    cache.routeKey !== config.routeKey ||
-    String(cache.userId) !== String(config.userId) ||
-    !cache.token ||
-    tokenExpiresSoon(cache.token)
-  )
-    return cacheMiss('Invalid/Expired');
-  return { cache, reason: '' };
-}
-
-async function refreshAmToken(config, logs) {
   const baseUrl = normalizeBaseUrl(config.apiDomain);
-  const vars = {
+  const logs = [];
+  const result = {};
+
+  const state = typeof input.state === 'object' && input.state ? input.state : {};
+  const steps = Array.isArray(input.steps)
+    ? input.steps
+    : ['start', 'activate', 'tokenActivate', 'tokenRefresh'];
+  const vars = () => ({
+    ...state,
+    GAME_CODE: config.gameCode,
+    RTP_CONFIG_CODE: config.gameCode === 'LGS-001' ? 'highRTP' : 'RTP_97',
     SIGNATURE: config.signature,
-    USER_ID: Number(config.userId),
-    ACCOUNT: config.account,
-    CODE: config.code,
-    ROUTE_KEY: config.routeKey,
-  };
-  const payload = resolveTemplates(
-    optionalObjectJson(config, 'amTokenBodyJson', 'AM token body JSON') || amTokenPayload(config),
-    vars,
-  );
-  const headers = {
-    accept: 'application/json',
-    'x-signature': config.signature,
-    'content-type': 'application/json',
-    ...resolveTemplates(
-      optionalObjectJson(config, 'amTokenHeadersJson', 'AM token headers JSON') || {},
-      vars,
-    ),
-  };
-
-  logs.push({ step: 'am.token.request', headers, payload });
-  const response = await requestJson({
-    method: 'POST',
-    url: `${baseUrl}/v1/service/am/token`,
-    headers,
-    body: payload,
+    NOW_MS: nowMs(),
   });
-  logs.push({ step: 'am.token.response', status: response.status, body: response.body });
-  if (response.status !== 200)
-    throw httpError(
-      `AM token failed`,
-      { step: 'am.token', status: response.status, response: response.body },
-      logs,
-    );
 
-  const cache = {
-    baseUrl,
-    account: config.account,
-    code: config.code,
-    routeKey: config.routeKey,
-    userId: String(config.userId),
-    token: response.body?.data?.token || '',
-    sessionId: response.body?.data?.sessionId || '',
-    savedAt: Date.now() / 1000,
+  if (steps.includes('start')) {
+    const headers = {
+      'x-signature': config.signature,
+      'content-type': 'application/json',
+      ...resolveTemplates(
+        optionalObjectJson(config, 'sessionStartHeadersJson', 'Start Headers') || {},
+        vars(),
+      ),
+    };
+    const payload = resolveTemplates(
+      optionalObjectJson(config, 'sessionStartBodyJson', 'Start Body') || {},
+      vars(),
+    );
+    logs.push({ step: 'session.start.request', headers, payload });
+    const res = await requestJson({
+      method: 'POST',
+      url: `${baseUrl}/v2/service/session/start`,
+      headers,
+      body: payload,
+    });
+    logs.push({ step: 'session.start.response', status: res.status, body: res.body });
+    if (res.status !== 200)
+      throw httpError(`Start failed`, { status: res.status, response: res.body }, logs);
+    state.SESSION_TOKEN = extractSessionToken(res.body) || state.SESSION_TOKEN;
+    state.SESSION_ID = extractSessionId(res.body) || state.SESSION_ID;
+    result.start = res.body;
+  }
+
+  if (steps.includes('activate')) {
+    const headers = {
+      'content-type': 'application/json',
+      ...resolveTemplates(
+        optionalObjectJson(config, 'sessionActivateHeadersJson', 'Activate Headers') || {},
+        vars(),
+      ),
+    };
+    const payload = resolveTemplates(
+      optionalObjectJson(config, 'sessionActivateBodyJson', 'Activate Body') || {},
+      vars(),
+    );
+    logs.push({ step: 'session.activate.request', headers, payload });
+    const res = await requestJson({
+      method: 'POST',
+      url: `${baseUrl}/v2/exp/session/activate`,
+      headers,
+      body: payload,
+    });
+    logs.push({ step: 'session.activate.response', status: res.status, body: res.body });
+    if (res.status !== 200)
+      throw httpError(`Activate failed`, { status: res.status, response: res.body }, logs);
+    state.GAME_ACCESS_TOKEN = extractAccessToken(res.body) || state.GAME_ACCESS_TOKEN;
+    result.activate = res.body;
+  }
+
+  if (steps.includes('tokenActivate')) {
+    const headers = resolveTemplates(
+      optionalObjectJson(config, 'tokenActivateHeadersJson', 'Token Activate Headers') || {},
+      vars(),
+    );
+    const payload = resolveTemplates(
+      optionalObjectJson(config, 'tokenActivateBodyJson', 'Token Activate Body'),
+      vars(),
+    );
+    logs.push({ step: 'token.activate.request', headers, payload });
+    const res = await requestJson({
+      method: 'POST',
+      url: `${baseUrl}/v1/exp/session-token/activate`,
+      headers,
+      body: payload || undefined,
+    });
+    logs.push({ step: 'token.activate.response', status: res.status, body: res.body });
+    if (res.status !== 200)
+      throw httpError(`Token Activate failed`, { status: res.status, response: res.body }, logs);
+    state.LOBBY_ACCESS_TOKEN = res.body?.data?.accessToken || state.LOBBY_ACCESS_TOKEN;
+    state.LOBBY_REFRESH_TOKEN = res.body?.data?.refreshToken || state.LOBBY_REFRESH_TOKEN;
+    result.tokenActivate = res.body;
+  }
+
+  if (steps.includes('tokenRefresh')) {
+    const headers = {
+      'content-type': 'application/json',
+      ...resolveTemplates(
+        optionalObjectJson(config, 'tokenRefreshHeadersJson', 'Token Refresh Headers') || {},
+        vars(),
+      ),
+    };
+    const payload = resolveTemplates(
+      optionalObjectJson(config, 'tokenRefreshBodyJson', 'Token Refresh Body') || {},
+      vars(),
+    );
+    logs.push({ step: 'token.refresh.request', headers, payload });
+    const res = await requestJson({
+      method: 'POST',
+      url: `${baseUrl}/v1/exp/session-token/refresh`,
+      headers,
+      body: payload,
+    });
+    logs.push({ step: 'token.refresh.response', status: res.status, body: res.body });
+    if (res.status !== 200)
+      throw httpError(`Token Refresh failed`, { status: res.status, response: res.body }, logs);
+    state.REFRESHED_ACCESS_TOKEN = res.body?.data?.accessToken || state.REFRESHED_ACCESS_TOKEN;
+    result.tokenRefresh = res.body;
+  }
+
+  return {
+    result,
+    state,
+    logs,
+    resultFile: saveFlowResult('lobby', config.gameCode, result, logs),
+    requestedAt,
+    respondedAt: displayTime(),
   };
-  writeJsonFile(AM_CACHE, cache);
-  return cache;
 }
 
 async function runMaintenanceFlow(input) {
@@ -954,113 +638,183 @@ async function runMaintenanceFlow(input) {
   };
   const baseUrl = normalizeBaseUrl(config.apiDomain);
   const logs = [];
-  const hasCustomAmTokenRequest = hasCustomJson(config, [
-    ['amTokenHeadersJson', amTokenHeadersTemplate()],
-    ['amTokenBodyJson', amTokenPayloadTemplate()],
-  ]);
-  let cache = hasCustomAmTokenRequest ? null : getAmCache(config).cache;
-  if (!cache) cache = await refreshAmToken(config, logs);
+  const result = {};
 
-  async function sendPatch() {
-    const vars = { AM_TOKEN: cache.token, IS_MAINTENANCE: config.isMaintenance };
-    const payload = resolveTemplates(
-      optionalObjectJson(config, 'maintenanceBodyJson', 'Maintenance body JSON') || {
-        isMaintenance: config.isMaintenance,
-      },
-      vars,
-    );
+  const state = typeof input.state === 'object' && input.state ? input.state : {};
+  const steps = Array.isArray(input.steps) ? input.steps : ['amToken', 'patch'];
+  const vars = () => ({
+    ...state,
+    GAME_CODE: config.gameCode,
+    SIGNATURE: config.signature,
+    IS_MAINTENANCE: config.isMaintenance,
+    USER_ID: Number(config.userId),
+    ACCOUNT: config.account,
+    CODE: config.code,
+    ROUTE_KEY: config.routeKey,
+  });
+
+  if (steps.includes('amToken')) {
     const headers = {
-      accept: 'application/json',
-      'x-access-token': cache.token,
       'content-type': 'application/json',
       ...resolveTemplates(
-        optionalObjectJson(config, 'maintenanceHeadersJson', 'Maintenance headers JSON') || {},
-        vars,
+        optionalObjectJson(config, 'amTokenHeadersJson', 'AM Token Headers') || {},
+        vars(),
       ),
     };
+    const payload = resolveTemplates(
+      optionalObjectJson(config, 'amTokenBodyJson', 'AM Token Body') || {},
+      vars(),
+    );
+    logs.push({ step: 'am.token.request', headers, payload });
+    const res = await requestJson({
+      method: 'POST',
+      url: `${baseUrl}/v1/service/am/token`,
+      headers,
+      body: payload,
+    });
+    logs.push({ step: 'am.token.response', status: res.status, body: res.body });
+    if (res.status !== 200)
+      throw httpError(`AM token failed`, { status: res.status, response: res.body }, logs);
+    state.AM_TOKEN = res.body?.data?.token || state.AM_TOKEN;
+    result.amToken = res.body;
+  }
+
+  if (steps.includes('patch')) {
+    const headers = {
+      'content-type': 'application/json',
+      ...resolveTemplates(
+        optionalObjectJson(config, 'maintenanceHeadersJson', 'Maintenance Headers') || {},
+        vars(),
+      ),
+    };
+    const payload = resolveTemplates(
+      optionalObjectJson(config, 'maintenanceBodyJson', 'Maintenance Body') || {},
+      vars(),
+    );
     logs.push({ step: 'maintenance.patch.request', headers, payload });
-    const response = await requestJson({
+    const res = await requestJson({
       method: 'PATCH',
       url: `${baseUrl}/v1/internal/game/${encodeURIComponent(config.gameCode)}/maintenance`,
       headers,
       body: payload,
     });
-    logs.push({ step: 'maintenance.patch.response', status: response.status, body: response.body });
-    return response;
+    logs.push({ step: 'maintenance.patch.response', status: res.status, body: res.body });
+    if (res.status !== 200)
+      throw httpError(`Maintenance patch failed`, { status: res.status, response: res.body }, logs);
+    result.patch = res.body;
   }
 
-  let patch = await sendPatch();
-  if (isInvalidToken(patch.status, patch.body)) {
-    cache = await refreshAmToken(config, logs);
-    patch = await sendPatch();
-  }
-  if (patch.status !== 200)
-    throw httpError(
-      `Maintenance patch failed`,
-      { step: 'maintenance.patch', status: patch.status, response: patch.body },
-      logs,
-    );
   return {
-    result: patch.body,
+    result,
+    state,
     logs,
-    resultFile: saveFlowResult('maintenance', config.gameCode, patch.body, logs),
+    resultFile: saveFlowResult('maintenance', config.gameCode, result, logs),
     requestedAt,
     respondedAt: displayTime(),
   };
 }
 
+// -------------------------------------------------------------
+// DEFAULT TEMPLATES CONFIG GENERATOR
+// -------------------------------------------------------------
 function defaultConfig() {
   const rgs = readEnv(path.join(RGS_DIR, '.env'));
   const lobby = readEnv(path.join(LOBBY_DIR, '.env'));
   const maintenance = readEnv(path.join(MAINTENANCE_DIR, '.env'));
-
   return {
-    global: {
-      apiDomain: rgs.API_DOMAIN || 'https://letsgo-rgs-gs1.iki-cit.cc',
-      signature: rgs.API_SIGNATURE || 'rgs-local-signature',
-      gameCode: rgs.GAME_CODE || 'LGS-006',
-    },
     rgs: {
-      apiDomain: rgs.API_DOMAIN || '',
-      signature: rgs.API_SIGNATURE || '',
-      gameCode: rgs.GAME_CODE || '',
-      sessionStartHeadersJson: prettyJson(sessionStartHeadersTemplate()),
-      sessionStartBodyJson: prettyJson(sessionStartPayloadTemplate()),
-      sessionActivateHeadersJson: prettyJson(sessionActivateHeadersTemplate()),
-      sessionActivateBodyJson: prettyJson(sessionActivatePayloadTemplate()),
-      betHeadersJson: prettyJson(playHeadersTemplate()),
-      betBodyJson: prettyJson(betPayloadTemplate()),
-      actionHeadersJson: prettyJson(playHeadersTemplate()),
-      actionBodyJson: prettyJson(actionPayloadTemplate()),
-      finishHeadersJson: prettyJson(playHeadersTemplate()),
-      finishBodyJson: prettyJson(finishPayloadTemplate()),
+      sessionStartHeadersJson: prettyJson({
+        'x-signature': '$SIGNATURE',
+        'content-type': 'application/json',
+      }),
+      sessionStartBodyJson: prettyJson({
+        gameCode: '$GAME_CODE',
+        lang: 'en',
+        gameSetting: { rtpConfigCode: '$RTP_CONFIG_CODE', isGeoBlocking: true },
+        country: 'GB',
+        isTestingPlayer: false,
+        mode: 'real',
+        operator: 'QARealGameOperator',
+        brand: 'QARealGameBrand',
+        playerId: 'QARealGameOperator:QARealGameBrand:kyle0c',
+        currency: 'EUR',
+        currencyId: 1,
+        externalPlayerId: 'kyle0c',
+        balance: '10000',
+        maxExposure: 0,
+        licenseConfig: {},
+        callback: 'https://httpbin.org/status/200',
+      }),
+      sessionActivateHeadersJson: prettyJson({ 'content-type': 'application/json' }),
+      sessionActivateBodyJson: prettyJson({
+        token: '$SESSION_TOKEN',
+        ts: 0,
+        timezone: 'us',
+        analytics: {
+          language: 'us',
+          device: 'mobile',
+          resolution: { w: 0, h: 0 },
+          orientation: 'landscape',
+          connection: 'slow-2g',
+        },
+      }),
+      betHeadersJson: prettyJson({
+        'cloudfront-viewer-country': 'JP',
+        'cloudfront-viewer-address': '1.2.3.4',
+        'x-access-token': '$ACCESS_TOKEN',
+        authorization: 'Bearer $ACCESS_TOKEN',
+      }),
+      betBodyJson: prettyJson({
+        session: '$SESSION_ID',
+        bet: { type: 'regular', value: '2' },
+        stakeMode: { type: 'commonGame', multiplier: 1, name: 'regular bet', rtp: 96.56 },
+        ts: 177445520478,
+      }),
+      actionHeadersJson: prettyJson({
+        'cloudfront-viewer-country': 'JP',
+        'cloudfront-viewer-address': '1.2.3.4',
+        'x-access-token': '$ACCESS_TOKEN',
+        authorization: 'Bearer $ACCESS_TOKEN',
+      }),
+      actionBodyJson: prettyJson({
+        session: '$SESSION_ID',
+        roundId: '$ROUND_ID',
+        action: '$ACTION',
+        ts: '$NOW_MS',
+      }),
+      finishHeadersJson: prettyJson({
+        'cloudfront-viewer-country': 'JP',
+        'cloudfront-viewer-address': '1.2.3.4',
+        'x-access-token': '$ACCESS_TOKEN',
+        authorization: 'Bearer $ACCESS_TOKEN',
+      }),
+      finishBodyJson: prettyJson({ session: '$SESSION_ID', roundId: '$ROUND_ID', ts: '$NOW_MS' }),
     },
     lobby: {
-      apiDomain: lobby.API_DOMAIN || '',
-      signature: lobby.API_SIGNATURE || '',
-      gameCode: lobby.GAME_CODE || '',
-      sessionStartHeadersJson: prettyJson(sessionStartHeadersTemplate()),
-      sessionStartBodyJson: prettyJson(sessionStartPayloadTemplate()),
-      sessionActivateHeadersJson: prettyJson(sessionActivateHeadersTemplate()),
-      sessionActivateBodyJson: prettyJson(sessionActivatePayloadTemplate()),
-      tokenActivateHeadersJson: prettyJson(lobbyTokenActivateHeadersTemplate()),
+      tokenActivateHeadersJson: prettyJson({ authorization: 'Bearer $GAME_ACCESS_TOKEN' }),
       tokenActivateBodyJson: 'null',
-      tokenRefreshHeadersJson: prettyJson(lobbyTokenRefreshHeadersTemplate()),
-      tokenRefreshBodyJson: prettyJson(lobbyTokenRefreshBodyTemplate()),
+      tokenRefreshHeadersJson: prettyJson({ authorization: 'Bearer $LOBBY_ACCESS_TOKEN' }),
+      tokenRefreshBodyJson: prettyJson({ refreshToken: '$LOBBY_REFRESH_TOKEN' }),
     },
     maintenance: {
-      apiDomain: maintenance.MAINTENANCE_API_DOMAIN || '',
-      signature: maintenance.API_SIGNATURE || '',
       userId: maintenance.AM_USER_ID || '0',
       account: maintenance.AM_ACCOUNT || 'kyle.c',
       code: maintenance.AM_CODE || 'SLT',
       routeKey: maintenance.AM_ROUTE_KEY || '*',
-      gameCode: maintenance.MAINTENANCE_GAME_CODE || '',
-      isMaintenance: maintenance.IS_MAINTENANCE === 'true',
-      amTokenHeadersJson: prettyJson(amTokenHeadersTemplate()),
-      amTokenBodyJson: prettyJson(amTokenPayloadTemplate()),
-      maintenanceHeadersJson: prettyJson(maintenanceHeadersTemplate()),
-      maintenanceBodyJson: prettyJson(maintenanceBodyTemplate()),
+      amTokenHeadersJson: prettyJson({ accept: 'application/json', 'x-signature': '$SIGNATURE' }),
+      amTokenBodyJson: prettyJson({
+        userId: '$USER_ID',
+        account: '$ACCOUNT',
+        code: '$CODE',
+        permission: [
+          { routeKey: '$ROUTE_KEY', methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', '*'] },
+        ],
+      }),
+      maintenanceHeadersJson: prettyJson({
+        accept: 'application/json',
+        'x-access-token': '$AM_TOKEN',
+      }),
+      maintenanceBodyJson: prettyJson({ isMaintenance: '$IS_MAINTENANCE' }),
     },
   };
 }
@@ -1081,79 +835,18 @@ async function handleApi(req, res, pathname) {
       }
     }
 
-    if (req.method === 'POST' && pathname === '/api/run-server') {
-      const { type, paths, restartPolicy } = await parseJsonBody(req);
-      let command = '';
-      let cwd = '';
-      let port = 0;
+    if (req.method === 'GET' && pathname === '/api/cache') {
+      const url = new URL(req.url, 'http://localhost');
+      const flow = url.searchParams.get('flow');
+      let cacheFile = '';
+      if (flow === 'bet') cacheFile = path.join(RGS_DIR, '.token-cache.json');
+      else if (flow === 'lobby') cacheFile = path.join(LOBBY_DIR, '.lobby-token-cache.json');
+      else if (flow === 'maintenance')
+        cacheFile = path.join(MAINTENANCE_DIR, '.am-token-cache.json');
 
-      switch (type) {
-        case 'money':
-          command = 'docker compose up -d';
-          cwd = paths.money;
-          break;
-        case 'queue':
-          command = 'docker compose up -d';
-          cwd = paths.queue;
-          break;
-        case 'apihub':
-          command = 'docker compose up -d && npm run build && npm run start';
-          cwd = paths.apihub;
-          break;
-        case 'remote':
-          command = 'npm run build && npm run start';
-          cwd = paths.remote;
-          port = 19080;
-          break;
-        case 'slot':
-          command = 'npm run build && npm run start';
-          cwd = paths.slot;
-          port = 8080;
-          break;
-      }
-
-      if (port !== 0) {
-        const checkUrl =
-          port === 8080
-            ? `http://127.0.0.1:8080/v1/service/healthcheck`
-            : `http://127.0.0.1:19080/v2/service/healthcheck`;
-        const running = await fetch(checkUrl)
-          .then((r) => r.ok)
-          .catch(() => false);
-        if (running && restartPolicy === 'ignore') {
-          console.log(
-            `\x1b[33m[${type}]\x1b[0m Ignored start because it is already running on port ${port}.`,
-          );
-          return jsonResponse(res, 200, { status: 'Ignored' });
-        }
-        if (running && restartPolicy === 'kill') {
-          try {
-            console.log(`\x1b[31m[${type}]\x1b[0m Killing existing process on port ${port}...`);
-            execSync(`lsof -t -i:${port} | xargs kill -9`, { stdio: 'ignore' });
-          } catch (e) {
-            /* ignore if port is already free */
-          }
-        }
-      }
-
-      console.log(`\n\x1b[36m[${type}]\x1b[0m Executing: ${command}`);
-      console.log(`\x1b[36m[${type}]\x1b[0m Directory: ${cwd}`);
-
-      // Execute and pipe all terminal output back to the Bun process
-      const child = exec(command, { cwd }, (err) => {
-        if (err) console.error(`\n\x1b[31m[${type}] Exec error:\x1b[0m`, err.message);
-      });
-
-      if (child.stdout) {
-        child.stdout.on('data', (data) => process.stdout.write(`\x1b[32m[${type}]\x1b[0m ${data}`));
-      }
-      if (child.stderr) {
-        child.stderr.on('data', (data) =>
-          process.stderr.write(`\x1b[33m[${type}]\x1b[0m ERR: ${data}`),
-        );
-      }
-
-      return jsonResponse(res, 200, { status: 'Command Triggered' });
+      if (cacheFile && fs.existsSync(cacheFile))
+        return jsonResponse(res, 200, { cache: readJsonFile(cacheFile) });
+      return jsonResponse(res, 200, { cache: null });
     }
 
     if (req.method === 'GET' && pathname === '/api/config')
@@ -1164,7 +857,6 @@ async function handleApi(req, res, pathname) {
         records: listRecords(url.searchParams.get('flow') || 'bet'),
       });
     }
-
     if (req.method === 'GET' && pathname === '/api/record') {
       const url = new URL(req.url, 'http://localhost');
       const flow = url.searchParams.get('flow') || 'bet';
@@ -1200,12 +892,11 @@ async function handleApi(req, res, pathname) {
 
 function serveStatic(req, res, pathname) {
   const filePath = path.resolve(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname.slice(1));
-  if (!filePath.startsWith(PUBLIC_DIR)) {
-    res.writeHead(403);
-    res.end('Forbidden');
-    return;
-  }
-  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+  if (
+    !filePath.startsWith(PUBLIC_DIR) ||
+    !fs.existsSync(filePath) ||
+    !fs.statSync(filePath).isFile()
+  ) {
     res.writeHead(404);
     res.end('Not found');
     return;
@@ -1219,17 +910,14 @@ function serveStatic(req, res, pathname) {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname.startsWith('/api/')) {
-    handleApi(req, res, url.pathname);
-    return;
-  }
+  if (url.pathname.startsWith('/api/')) return handleApi(req, res, url.pathname);
   serveStatic(req, res, url.pathname);
 });
 
 if (require.main === module) {
   const port = Number(process.env.PORT || 3000);
-  server.listen(port, '127.0.0.1', () => {
-    console.log(`API test web is running at http://localhost:${port}`);
-  });
+  server.listen(port, '127.0.0.1', () =>
+    console.log(`API test web is running at http://localhost:${port}`),
+  );
 }
 module.exports = server;
