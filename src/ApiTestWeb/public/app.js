@@ -17,10 +17,20 @@ const healthStatusEl = document.querySelector('#healthcheck-status');
 const envRadios = document.querySelectorAll('input[name="envType"]');
 
 const ENV_CONFIG = {
-  LOCAL: { url: 'http://localhost:19080', sig: 'rgs-local-signature', gc: 'LGS-006' },
-  CIT: { url: 'https://letsgo-rgs-gs1.iki-cit.cc', sig: 'rgs-local-signature', gc: 'LGS-006' },
-  QAT: { url: 'https://letsgo-rgs-gs1.iki-qat.cc', sig: 'rgs-local-signature', gc: 'LGS-006' },
+  LOCAL: { url: 'http://localhost:19080', sig: 'rgs-local-signature', gc: 'LGS-006', amUrl: 'http://localhost:8080' },
+  CIT: { url: 'https://letsgo-rgs-gs1.iki-cit.cc', sig: 'rgs-local-signature', gc: 'LGS-006', amUrl: 'https://letsgo-rgs.iki-cit.cc' },
+  QAT: { url: 'https://letsgo-rgs-gs1.iki-qat.cc', sig: 'rgs-local-signature', gc: 'LGS-006', amUrl: 'https://letsgo-rgs.iki-qat.cc' },
 };
+
+const SPLITTER_DEFAULTS = {
+  'json-splitter-0': 'calc(29.7403% - 3px)',
+  'main-splitter': 'calc(57.4705% - 3px)',
+};
+
+function currentEnvType() {
+  const r = document.querySelector('input[name="envType"]:checked');
+  return r ? r.value : 'LOCAL';
+}
 
 const wsTabs = document.querySelectorAll('.ws-tab');
 const wsPanels = { result: document.querySelector('#ws-result'), trace: wsTrace };
@@ -162,8 +172,12 @@ function restoreButtonText() {
   maintenanceForm.querySelector('button[type="submit"]').textContent = '🛡️ Execute Checked Steps';
 }
 
-function formValues(form) {
-  const data = { apiDomain: globalDomainEl.value, signature: globalSignatureEl.value, gameCode: globalGameCodeEl.value, steps: [] };
+function formValues(form, flowName) {
+  // Maintenance (AM) lives on a different host than the game RGS. Resolve per env; LOCAL -> 8080.
+  const apiDomain = flowName === 'maintenance'
+    ? (ENV_CONFIG[currentEnvType()]?.amUrl || 'http://localhost:8080')
+    : globalDomainEl.value;
+  const data = { apiDomain, signature: globalSignatureEl.value, gameCode: globalGameCodeEl.value, steps: [] };
   
   for (const element of form.elements) {
     if (!element.name) continue;
@@ -226,6 +240,8 @@ async function loadConfig() {
   restoreCachedInputs();
   const activeRadio = document.querySelector('input[name="envType"]:checked');
   if(activeRadio) loadEnvSpecificCache(activeRadio.value);
+  // Re-render mapping rows from restored textarea values (must run AFTER restoreCachedInputs).
+  initStateMappers();
 }
 
 // Healthcheck
@@ -247,7 +263,8 @@ const btnToggleRecent = document.querySelector('#btn-toggle-recent');
 const recentDropdown = document.querySelector('#recent-dropdown');
 btnToggleRecent.addEventListener('click', () => recentDropdown.classList.toggle('is-active'));
 document.addEventListener('click', (e) => {
-  if (!e.target.closest('.recent-wrapper')) recentDropdown.classList.remove('is-active');
+  // Keep open when switching flow tabs; only close on genuine outside clicks.
+  if (!e.target.closest('.recent-wrapper') && !e.target.closest('.tab')) recentDropdown.classList.remove('is-active');
 });
 
 function renderRecords(records) {
@@ -255,24 +272,48 @@ function renderRecords(records) {
   if (!records.length) return recordsListEl.innerHTML = '<div class="text-xs">No records yet</div>';
   records.forEach((record) => {
     const btn = document.createElement('button'); btn.className = 'record-button'; btn.type = 'button'; btn.dataset.id = record.id;
+    const nameRow = document.createElement('div'); nameRow.className = 'record-name-row';
     const name = document.createElement('span'); name.className = 'record-name'; name.textContent = record.file;
-    const time = document.createElement('span'); time.className = 'record-time'; time.textContent = `${record.updatedAt}${record.hasTrace ? ' | Trace available' : ''}`;
-    btn.append(name, time);
+    nameRow.append(name);
+    const st = record.status;
+    if (st) {
+      const badge = document.createElement('span');
+      badge.className = 'record-status ' + (st.ok ? 'is-ok' : st.warn ? 'is-warn' : 'is-err');
+      badge.textContent = st.ok ? `${st.code} OK` : String(st.code);
+      badge.title = st.msg || '';
+      nameRow.append(badge);
+    }
+    const time = document.createElement('span'); time.className = 'record-time'; time.textContent = `${record.updatedAt}${record.hasTrace ? ' | Trace' : ''}`;
+    btn.append(nameRow, time);
+    if (st && !st.ok && st.msg) {
+      const err = document.createElement('span'); err.className = 'record-error'; err.textContent = midTrim(st.msg); err.title = st.msg;
+      btn.append(err);
+    }
     btn.addEventListener('click', () => { loadRecord(record.id, btn); recentDropdown.classList.remove('is-active'); });
     recordsListEl.append(btn);
   });
 }
 
-function saveRecordToLocal(flow, recordData) {
+// Middle-trim long strings so they fit the record row: "Activate fai…required token".
+function midTrim(str, max = 42) {
+  const s = String(str || '');
+  if (s.length <= max) return s;
+  const head = Math.ceil((max - 1) * 0.65);
+  const tail = max - 1 - head;
+  return s.slice(0, head) + '…' + s.slice(s.length - tail);
+}
+
+function saveRecordToFlow(flow, recordData, statusInfo = null) {
   const key = `api_records_${flow}`;
   let records = [];
   try { records = JSON.parse(localStorage.getItem(key)) || []; } catch(e) { records = []; }
-  
+
   const id = Date.now().toString();
   const fileLabel = `Flow Record ${new Date().toLocaleTimeString()}`;
   const newRecord = {
     id, file: fileLabel, updatedAt: new Date().toLocaleString(),
     hasTrace: !!(recordData.logs && recordData.logs.length),
+    status: statusInfo,
     ...recordData
   };
   records.unshift(newRecord);
@@ -352,6 +393,7 @@ tabs.forEach((tab) => {
     tabs.forEach((item) => item.classList.toggle('is-active', item === tab));
     Object.entries(panels).forEach(([key, panel]) => panel.classList.toggle('is-active', key === activeTab));
     restoreTabState(activeTab); loadRecords();
+    switchFlowCacheTo(activeTab);
   });
 });
 
@@ -381,10 +423,14 @@ function extractPaths(obj, prefix = "") {
 async function executeFlow(form, apiPath, flowName) {
   setBusy(true); setStatus('Running', 'running'); resultFileEl.textContent = '';
   try {
-    const data = await postJson(apiPath, formValues(form));
-    const saved = saveRecordToLocal(flowName, data);
+    const data = await postJson(apiPath, formValues(form, flowName));
+    const statusInfo = data.maintenanceBlock
+      ? { ok: false, warn: true, code: 'BLOCK', msg: data.maintenanceBlock.step || 'maintenance' }
+      : { ok: true, code: 200, msg: '' };
+    const saved = saveRecordToFlow(flowName, data, statusInfo);
     localStorage.setItem(`api_cache_${flowName}`, JSON.stringify(data.state || {}));
-    
+    refreshFlowCacheIfOpen(flowName);
+
     try {
       console.log("Extracting paths for flow", flowName, data.result);
       const newlyExtracted = extractPaths(data.result || {});
@@ -408,8 +454,18 @@ async function executeFlow(form, apiPath, flowName) {
     await loadRecords();
   } catch (error) {
     const errData = error.payload || {};
-    const saved = saveRecordToLocal(flowName, { result: errData, logs: errData.logs, state: errData.state });
-    if (errData.state) localStorage.setItem(`api_cache_${flowName}`, JSON.stringify(errData.state));
+    const isBlock = (error.message || '').includes('MAINTENANCE');
+    const eMsg = errData.details?.response?.error?.message
+      || errData.details?.response?.message
+      || errData.error || error.message || 'Error';
+    const statusInfo = {
+      ok: false,
+      warn: isBlock,
+      code: errData.details?.status || (isBlock ? 'BLOCK' : 'ERR'),
+      msg: errData.error && errData.error !== eMsg ? `${errData.error}: ${eMsg}` : eMsg,
+    };
+    const saved = saveRecordToFlow(flowName, { result: errData, logs: errData.logs, state: errData.state }, statusInfo);
+    if (errData.state) { localStorage.setItem(`api_cache_${flowName}`, JSON.stringify(errData.state)); refreshFlowCacheIfOpen(flowName); }
     showJson(resultEl, resultPayload(error.payload, error.message)); renderTraceLogs(errData.logs || []);
     resultFileEl.textContent = resultMeta(saved);
     setStatus(error.message.includes('MAINTENANCE BLOCKED') ? 'Maintenance Block' : 'Error', error.message.includes('MAINTENANCE BLOCKED') ? 'warning' : 'error');
@@ -486,7 +542,8 @@ function applyLayoutMode(mode) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = `step-tab ${index === activeIndex ? 'is-active' : ''}`;
-      
+      btn.title = title;
+
       if (hiddenCheckbox && !isTrace) {
         btn.innerHTML = `<input type="checkbox" ${hiddenCheckbox.checked ? 'checked' : ''}> <span>${title}</span>`;
         const tabCb = btn.querySelector('input');
@@ -535,7 +592,7 @@ function applyLayoutMode(mode) {
       
       container.insertBefore(splitter, groups[0]);
       initSplitter(splitter, tabsDiv, groups[0], false);
-      const savedWidth = localStorage.getItem(`splitter_${splitter.id}`);
+      const savedWidth = localStorage.getItem(`splitter_${splitter.id}`) || SPLITTER_DEFAULTS[splitter.id];
       if (savedWidth) tabsDiv.style.width = savedWidth;
     }
 
@@ -554,37 +611,73 @@ document.querySelectorAll('input[name="layoutMode"]').forEach(radio => {
   });
 });
 
-// --- BACKEND CACHE FLOATING WINDOW LOGIC ---
-const floatingCache = document.querySelector('#floating-cache-viewer');
+function applyTrimTabs(enabled) {
+  document.body.classList.toggle('no-trim', !enabled);
+}
+const trimToggle = document.getElementById('setting-trim-tabs');
+const savedTrim = localStorage.getItem('console_trim_tabs');
+const trimEnabled = savedTrim === null ? false : savedTrim === 'true';
+if (trimToggle) trimToggle.checked = trimEnabled;
+applyTrimTabs(trimEnabled);
+if (trimToggle) {
+  trimToggle.addEventListener('change', (e) => {
+    localStorage.setItem('console_trim_tabs', String(e.target.checked));
+    applyTrimTabs(e.target.checked);
+  });
+}
+
+// --- FLOW CACHE DROPDOWN (mirrors Recent Executions) ---
+const cacheDropdown = document.querySelector('#cache-dropdown');
 const cacheContentEl = document.querySelector('#backend-cache-content');
 
-if (floatingCache && cacheContentEl) {
-  document.querySelector('#btn-close-cache').addEventListener('click', () => floatingCache.classList.remove('is-active'));
+function renderFlowCache(flow) {
+  if (!cacheContentEl) return;
+  const val = localStorage.getItem(`api_cache_${flow}`);
+  try {
+    const obj = JSON.parse(val || "{}");
+    let htmlStr = '<table class="cache-table" style="width:100%; border-collapse: collapse;">';
+    for (const [k, v] of Object.entries(obj)) {
+      htmlStr += `<tr>
+        <td style="padding: 12px 8px; border-bottom: 1px solid var(--line); font-weight: bold; width: 30%; word-break: break-all; vertical-align: top; color: var(--accent);">${k}</td>
+        <td style="padding: 12px 8px; border-bottom: 1px solid var(--line); word-break: break-all; font-family: monospace; cursor: text; vertical-align: top; line-height: 1.4;"
+            ondblclick="const s=window.getSelection(); const r=document.createRange(); r.selectNodeContents(this); s.removeAllRanges(); s.addRange(r);">${v}</td>
+      </tr>`;
+    }
+    htmlStr += '</table>';
+    if (Object.keys(obj).length === 0) htmlStr = '<div style="padding:16px; color:var(--muted)">{}</div>';
+    cacheContentEl.innerHTML = htmlStr;
+  } catch(e) {
+    cacheContentEl.innerHTML = '<div style="padding:16px; color:var(--muted)">{}</div>';
+  }
+}
 
-  document.querySelectorAll('.btn-view-cache').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const flow = btn.dataset.flow;
-      const val = localStorage.getItem(`api_cache_${flow}`);
-      try {
-        
-        const obj = JSON.parse(val || "{}");
-        let htmlStr = '<table class="cache-table" style="width:100%; border-collapse: collapse;">';
-        for (const [k, v] of Object.entries(obj)) {
-          htmlStr += `<tr>
-            <td style="padding: 12px 8px; border-bottom: 1px solid var(--line); font-weight: bold; width: 30%; word-break: break-all; vertical-align: top; color: var(--accent);">${k}</td>
-            <td style="padding: 12px 8px; border-bottom: 1px solid var(--line); word-break: break-all; font-family: monospace; cursor: text; vertical-align: top; line-height: 1.4;"
-                ondblclick="const s=window.getSelection(); const r=document.createRange(); r.selectNodeContents(this); s.removeAllRanges(); s.addRange(r);">${v}</td>
-          </tr>`;
-        }
-        htmlStr += '</table>';
-        if (Object.keys(obj).length === 0) htmlStr = '<div style="padding:16px; color:var(--muted)">{}</div>';
-        cacheContentEl.innerHTML = htmlStr;
-      } catch(e) {
-        cacheContentEl.innerHTML = '<div style="padding:16px; color:var(--muted)">{}</div>';
-      }
-      floatingCache.classList.add('is-active');
-    });
+function cacheIsOpen() {
+  return cacheDropdown && cacheDropdown.classList.contains('is-active');
+}
+
+// Live re-render while open + active flow (no refresh).
+function refreshFlowCacheIfOpen(flow) {
+  if (cacheIsOpen() && flow === activeTab) renderFlowCache(flow);
+}
+
+// On flow-tab switch, keep dropdown open and show the new flow's cache.
+function switchFlowCacheTo(flow) {
+  if (cacheIsOpen()) renderFlowCache(flow);
+}
+
+if (cacheDropdown && cacheContentEl) {
+  const btnToggleCache = document.querySelector('#btn-toggle-cache');
+  btnToggleCache.addEventListener('click', () => {
+    const open = cacheDropdown.classList.toggle('is-active');
+    if (open) renderFlowCache(activeTab);
   });
+  // Stay open across flow-tab switches; close only on genuine outside clicks.
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#cache-wrapper') && !e.target.closest('.tab')) {
+      cacheDropdown.classList.remove('is-active');
+    }
+  });
+
 }
 
 
@@ -621,7 +714,8 @@ function initSplitter(splitter, leftEl, rightEl, isPercent = false) {
       localStorage.setItem(`splitter_${splitter.id || Array.from(splitter.parentNode.children).indexOf(splitter)}`, leftEl.style.width);
     }
   });
-  const saved = localStorage.getItem(`splitter_${splitter.id || Array.from(splitter.parentNode.children).indexOf(splitter)}`);
+  const splitterKey = splitter.id || Array.from(splitter.parentNode.children).indexOf(splitter);
+  const saved = localStorage.getItem(`splitter_${splitterKey}`) || SPLITTER_DEFAULTS[splitterKey];
   if (saved) {
     leftEl.style.width = saved;
     leftEl.style.minWidth = '0';
@@ -676,7 +770,10 @@ function initStateMappers() {
       let paths = [];
       try { paths = JSON.parse(localStorage.getItem('schema_cache_' + flowName) || '[]'); } catch(e) {}
       console.log("Updating datalist for", flowName, "with paths:", paths);
-      datalist.innerHTML = paths.map(p => `<option value="${p}"></option>`).join('');
+      datalist.innerHTML = paths.map(p => {
+        const step = String(p).split('.')[0];
+        return `<option value="${p}" label="[${step.toUpperCase()}] ${p}"></option>`;
+      }).join('');
       
       if (isChanged) {
          const notice = document.createElement('div');
@@ -687,9 +784,13 @@ function initStateMappers() {
       }
     };
     updateDatalist();
-    window.addEventListener('schema_updated', (e) => {
-      if (e.detail.flow === flowName) updateDatalist(e.detail.changed);
-    });
+    window.__schemaBound = window.__schemaBound || {};
+    if (!window.__schemaBound[flowName]) {
+      window.__schemaBound[flowName] = true;
+      window.addEventListener('schema_updated', (e) => {
+        if (e.detail.flow === flowName) updateDatalist(e.detail.changed);
+      });
+    }
     
     const renderRows = () => {
       let mapping = {};

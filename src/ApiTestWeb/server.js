@@ -4,6 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
+function displayTime() {
+  const d = new Date();
+  return d.toISOString().replace('T', ' ').substring(0, 19) + 'Z';
+}
+
 const ROOT = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(ROOT, '..');
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -37,6 +42,12 @@ function readEnv(filePath) {
     env[trimmed.slice(0, index)] = trimmed.slice(index + 1);
   }
   return env;
+}
+
+function resolveDomain(value, fallback) {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return fallback;
+  return trimmed;
 }
 
 function normalizeBaseUrl(value) {
@@ -93,10 +104,11 @@ async function requestJson({ method, url, headers = {}, body }) {
   return { status: response.status, ok: response.ok, body: getParsedBody() };
 }
 
-function httpError(message, details, logs = null) {
+function httpError(message, details, logs = null, state = null) {
   const error = new Error(message);
   error.details = details;
   error.logs = logs;
+  error.state = state;
   return error;
 }
 
@@ -160,92 +172,37 @@ function resolveTemplates(value, vars) {
   );
 }
 
-function writeJsonFile(filePath, data) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`);
+function safeGet(obj, path) {
+  if (typeof path !== 'string' || !obj) return undefined;
+  const keys = path.split('.');
+  let current = obj;
+  for (const key of keys) {
+    if (current === null || current === undefined) return undefined;
+    current = current[key];
+  }
+  return current;
 }
 
-const RECORD_CONFIGS = {
-  bet: { resultDir: RESULT_DIR, traceDir: TRACE_DIR, pattern: /-bet-.*\.json$/, suffix: 'bet' },
-  lobby: {
-    resultDir: LOBBY_RESULT_DIR,
-    traceDir: LOBBY_TRACE_DIR,
-    pattern: /-lobby-.*\.json$/,
-    suffix: 'lobby',
-  },
-  maintenance: {
-    resultDir: MAINTENANCE_RESULT_DIR,
-    traceDir: MAINTENANCE_TRACE_DIR,
-    pattern: /-maintenance-.*\.json$/,
-    suffix: 'maintenance',
-  },
-};
-
-function recordConfig(flow) {
-  return RECORD_CONFIGS[flow] || RECORD_CONFIGS.bet;
-}
-
-function cleanupOldResults(flow = 'bet') {
-  const config = recordConfig(flow);
-  if (!fs.existsSync(config.resultDir)) return;
-  const files = fs
-    .readdirSync(config.resultDir)
-    .filter((name) => config.pattern.test(name))
-    .sort()
-    .reverse();
-  for (const name of files.slice(MAX_RESULT_FILES)) {
-    fs.rmSync(path.join(config.resultDir, name), { force: true });
-    fs.rmSync(path.join(config.traceDir, `${name}.trace.json`), { force: true });
+function processStateExtraction(mappingJsonStr, resultObj, stateObj, currentStepResponse = null) {
+  if (!mappingJsonStr || typeof mappingJsonStr !== 'string') return;
+  try {
+    const mapping = JSON.parse(mappingJsonStr);
+    for (const [stateKey, path] of Object.entries(mapping)) {
+      let val = safeGet(resultObj, path);
+      if (val === undefined && currentStepResponse && typeof path === 'string' && path.startsWith('step.')) {
+        val = safeGet(currentStepResponse, path.substring(5));
+      }
+      if (val !== undefined) {
+        stateObj[stateKey] = val;
+      }
+    }
+  } catch(e) {
+    console.error("Failed to parse state mapping:", e.message);
   }
 }
-
-function listRecords(flow = 'bet') {
-  const config = recordConfig(flow);
-  if (!fs.existsSync(config.resultDir)) return [];
-  return fs
-    .readdirSync(config.resultDir)
-    .filter((name) => config.pattern.test(name))
-    .sort()
-    .reverse()
-    .slice(0, MAX_RESULT_FILES)
-    .map((name) => {
-      const filePath = path.join(config.resultDir, name);
-      return {
-        file: name,
-        resultFile: path.relative(REPO_ROOT, filePath),
-        updatedAt: displayTimeFromDate(fs.statSync(filePath).mtime),
-        hasTrace: fs.existsSync(path.join(config.traceDir, `${name}.trace.json`)),
-      };
-    });
+function extractAccessToken(body) {
+  return body?.token || body?.accessToken || body?.data?.token || body?.data?.accessToken || '';
 }
-
-function timestamp() {
-  const date = new Date(),
-    pad = (value) => String(value).padStart(2, '0');
-  return [
-    date.getFullYear(),
-    pad(date.getMonth() + 1),
-    pad(date.getDate()),
-    pad(date.getHours()),
-    pad(date.getMinutes()),
-    pad(date.getSeconds()),
-  ].join('');
-}
-
-function displayTime() {
-  return displayTimeFromDate(new Date());
-}
-function displayTimeFromDate(date) {
-  const pad = (value) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
-function nowMs() {
-  return Date.now();
-}
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function extractLaunchToken(launchUrl) {
   if (!launchUrl) return '';
   try {
@@ -260,24 +217,19 @@ function extractSessionToken(body) {
     body?.token ||
     body?.sessionToken ||
     body?.data?.token ||
-    extractLaunchToken(body?.data?.launchUrl)
+    body?.data?.sessionToken ||
+    extractLaunchToken(body?.data?.launchUrl) ||
+    ''
   );
 }
 function extractSessionId(body) {
-  return body?.session || body?.sessionId || body?.data?.session || body?.data?.sessionId || '';
+  return body?.sessionId || body?.session || body?.data?.sessionId || body?.data?.session || '';
 }
-function extractAccessToken(body) {
-  return body?.token || body?.accessToken || body?.data?.token || body?.data?.accessToken || '';
+function nowMs() {
+  return Date.now();
 }
 
-function saveFlowResult(flow, suffixValue, result, logs = []) {
-  const config = recordConfig(flow);
-  const filename = `${timestamp()}-${config.suffix}-${suffixValue || 'result'}.json`;
-  writeJsonFile(path.join(config.resultDir, filename), result);
-  writeJsonFile(path.join(config.traceDir, `${filename}.trace.json`), logs);
-  cleanupOldResults(flow);
-  return path.relative(REPO_ROOT, path.join(config.resultDir, filename));
-}
+
 
 // -------------------------------------------------------------
 // FLOW RUNNERS (Stateless)
@@ -286,7 +238,7 @@ function saveFlowResult(flow, suffixValue, result, logs = []) {
 async function runBetFlow(input) {
   const requestedAt = displayTime();
   const config = {
-    apiDomain: input.apiDomain || 'localhost:19080',
+    apiDomain: resolveDomain(input.apiDomain, 'localhost:19080'),
     signature: input.signature || 'rgs-local-signature',
     gameCode: input.gameCode || 'LGS-006',
     sessionStartHeadersJson: input.sessionStartHeadersJson || '',
@@ -340,13 +292,14 @@ async function runBetFlow(input) {
     });
     logs.push({ step: 'session.start.response', status: res.status, body: res.body });
     const block = detectMaintenanceBlock('session.start', res.status, res.body);
-    if (block) throw httpError(`MAINTENANCE BLOCKED`, block, logs);
+    if (block) throw httpError(`MAINTENANCE BLOCKED`, block, logs, state);
     if (res.status !== 200)
-      throw httpError(`Start failed`, { status: res.status, response: res.body }, logs);
+      throw httpError(`Start failed`, { status: res.status, response: res.body }, logs, state);
 
     state.SESSION_TOKEN = extractSessionToken(res.body) || state.SESSION_TOKEN;
     state.SESSION_ID = extractSessionId(res.body) || state.SESSION_ID;
     result.start = res.body;
+    processStateExtraction(input.stateExtractMapping, result, state, res.body);
   }
 
   if (steps.includes('activate')) {
@@ -370,13 +323,14 @@ async function runBetFlow(input) {
     });
     logs.push({ step: 'session.activate.response', status: res.status, body: res.body });
     const block = detectMaintenanceBlock('session.activate', res.status, res.body);
-    if (block) throw httpError(`MAINTENANCE BLOCKED`, block, logs);
+    if (block) throw httpError(`MAINTENANCE BLOCKED`, block, logs, state);
     if (res.status !== 200)
-      throw httpError(`Activate failed`, { status: res.status, response: res.body }, logs);
+      throw httpError(`Activate failed`, { status: res.status, response: res.body }, logs, state);
 
     state.ACCESS_TOKEN = extractAccessToken(res.body) || state.ACCESS_TOKEN;
     if (!state.SESSION_ID) state.SESSION_ID = extractSessionId(res.body) || state.SESSION_ID;
     result.activate = res.body;
+    processStateExtraction(input.stateExtractMapping, result, state, res.body);
   }
 
   if (steps.includes('bet')) {
@@ -400,9 +354,9 @@ async function runBetFlow(input) {
     });
     logs.push({ step: 'play.bet.response', status: res.status, body: res.body });
     const block = detectMaintenanceBlock('play.bet', res.status, res.body);
-    if (block) throw httpError(`MAINTENANCE BLOCKED`, block, logs);
+    if (block) throw httpError(`MAINTENANCE BLOCKED`, block, logs, state);
     if (res.status !== 200)
-      throw httpError(`Bet failed`, { status: res.status, response: res.body }, logs);
+      throw httpError(`Bet failed`, { status: res.status, response: res.body }, logs, state);
 
     state.ROUND_ID = res.body?.data?.roundId || state.ROUND_ID;
     const actionVal =
@@ -411,6 +365,7 @@ async function runBetFlow(input) {
       res.body?.data?.actions?.[0];
     if (actionVal !== undefined) state.ACTION = actionVal;
     result.bet = res.body;
+    processStateExtraction(input.stateExtractMapping, result, state, res.body);
   }
 
   if (steps.includes('action')) {
@@ -435,8 +390,9 @@ async function runBetFlow(input) {
       });
       logs.push({ step: 'play.action.response', status: res.status, body: res.body });
       if (res.status !== 200)
-        throw httpError(`Action failed`, { status: res.status, response: res.body }, logs);
+        throw httpError(`Action failed`, { status: res.status, response: res.body }, logs, state);
       result.action = res.body;
+      processStateExtraction(input.stateExtractMapping, result, state, res.body);
     }
   }
 
@@ -461,15 +417,17 @@ async function runBetFlow(input) {
     });
     logs.push({ step: 'play.finish.response', status: res.status, body: res.body });
     if (res.status !== 200)
-      throw httpError(`Finish failed`, { status: res.status, response: res.body }, logs);
+      throw httpError(`Finish failed`, { status: res.status, response: res.body }, logs, state);
     result.finish = res.body;
+    processStateExtraction(input.stateExtractMapping, result, state, res.body);
   }
 
+  processStateExtraction(input.stateExtractMapping, result, state);
   return {
     result,
     state,
     logs,
-    resultFile: saveFlowResult('bet', config.gameCode, result, logs),
+    
     requestedAt,
     respondedAt: displayTime(),
   };
@@ -478,7 +436,7 @@ async function runBetFlow(input) {
 async function runLobbyFlow(input) {
   const requestedAt = displayTime();
   const config = {
-    apiDomain: input.apiDomain || 'localhost:19080',
+    apiDomain: resolveDomain(input.apiDomain, 'localhost:19080'),
     signature: input.signature || 'rgs-local-signature',
     gameCode: input.gameCode || 'LGS-006',
     sessionStartHeadersJson: input.sessionStartHeadersJson || '',
@@ -528,10 +486,11 @@ async function runLobbyFlow(input) {
     });
     logs.push({ step: 'session.start.response', status: res.status, body: res.body });
     if (res.status !== 200)
-      throw httpError(`Start failed`, { status: res.status, response: res.body }, logs);
+      throw httpError(`Start failed`, { status: res.status, response: res.body }, logs, state);
     state.SESSION_TOKEN = extractSessionToken(res.body) || state.SESSION_TOKEN;
     state.SESSION_ID = extractSessionId(res.body) || state.SESSION_ID;
     result.start = res.body;
+    processStateExtraction(input.stateExtractMapping, result, state, res.body);
   }
 
   if (steps.includes('activate')) {
@@ -555,9 +514,10 @@ async function runLobbyFlow(input) {
     });
     logs.push({ step: 'session.activate.response', status: res.status, body: res.body });
     if (res.status !== 200)
-      throw httpError(`Activate failed`, { status: res.status, response: res.body }, logs);
+      throw httpError(`Activate failed`, { status: res.status, response: res.body }, logs, state);
     state.GAME_ACCESS_TOKEN = extractAccessToken(res.body) || state.GAME_ACCESS_TOKEN;
     result.activate = res.body;
+    processStateExtraction(input.stateExtractMapping, result, state, res.body);
   }
 
   if (steps.includes('tokenActivate')) {
@@ -578,10 +538,11 @@ async function runLobbyFlow(input) {
     });
     logs.push({ step: 'token.activate.response', status: res.status, body: res.body });
     if (res.status !== 200)
-      throw httpError(`Token Activate failed`, { status: res.status, response: res.body }, logs);
+      throw httpError(`Token Activate failed`, { status: res.status, response: res.body }, logs, state);
     state.LOBBY_ACCESS_TOKEN = res.body?.data?.accessToken || state.LOBBY_ACCESS_TOKEN;
     state.LOBBY_REFRESH_TOKEN = res.body?.data?.refreshToken || state.LOBBY_REFRESH_TOKEN;
     result.tokenActivate = res.body;
+    processStateExtraction(input.stateExtractMapping, result, state, res.body);
   }
 
   if (steps.includes('tokenRefresh')) {
@@ -605,16 +566,18 @@ async function runLobbyFlow(input) {
     });
     logs.push({ step: 'token.refresh.response', status: res.status, body: res.body });
     if (res.status !== 200)
-      throw httpError(`Token Refresh failed`, { status: res.status, response: res.body }, logs);
+      throw httpError(`Token Refresh failed`, { status: res.status, response: res.body }, logs, state);
     state.REFRESHED_ACCESS_TOKEN = res.body?.data?.accessToken || state.REFRESHED_ACCESS_TOKEN;
     result.tokenRefresh = res.body;
+    processStateExtraction(input.stateExtractMapping, result, state, res.body);
   }
 
+  processStateExtraction(input.stateExtractMapping, result, state);
   return {
     result,
     state,
     logs,
-    resultFile: saveFlowResult('lobby', config.gameCode, result, logs),
+    
     requestedAt,
     respondedAt: displayTime(),
   };
@@ -623,12 +586,12 @@ async function runLobbyFlow(input) {
 async function runMaintenanceFlow(input) {
   const requestedAt = displayTime();
   const config = {
-    apiDomain: input.apiDomain || 'localhost:8080',
+    apiDomain: resolveDomain(input.apiDomain, 'localhost:8080'),
     signature: input.signature || 'rgs-local-signature',
     userId: input.userId ?? 0,
     account: input.account || 'kyle.c',
-    code: input.code || 'SLT',
-    routeKey: input.routeKey || 'V1_INTERNAL_GAME_MAINTENANCE',
+    code: input.code || '*',
+    routeKey: input.routeKey || '*',
     gameCode: input.gameCode || 'LGS-006',
     isMaintenance: Boolean(input.isMaintenance),
     amTokenHeadersJson: input.amTokenHeadersJson || '',
@@ -674,9 +637,10 @@ async function runMaintenanceFlow(input) {
     });
     logs.push({ step: 'am.token.response', status: res.status, body: res.body });
     if (res.status !== 200)
-      throw httpError(`AM token failed`, { status: res.status, response: res.body }, logs);
+      throw httpError(`AM token failed`, { status: res.status, response: res.body }, logs, state);
     state.AM_TOKEN = res.body?.data?.token || state.AM_TOKEN;
     result.amToken = res.body;
+    processStateExtraction(input.stateExtractMapping, result, state, res.body);
   }
 
   if (steps.includes('patch')) {
@@ -700,15 +664,17 @@ async function runMaintenanceFlow(input) {
     });
     logs.push({ step: 'maintenance.patch.response', status: res.status, body: res.body });
     if (res.status !== 200)
-      throw httpError(`Maintenance patch failed`, { status: res.status, response: res.body }, logs);
+      throw httpError(`Maintenance patch failed`, { status: res.status, response: res.body }, logs, state);
     result.patch = res.body;
+    processStateExtraction(input.stateExtractMapping, result, state, res.body);
   }
 
+  processStateExtraction(input.stateExtractMapping, result, state);
   return {
     result,
     state,
     logs,
-    resultFile: saveFlowResult('maintenance', config.gameCode, result, logs),
+    
     requestedAt,
     respondedAt: displayTime(),
   };
@@ -791,6 +757,41 @@ function defaultConfig() {
       finishBodyJson: prettyJson({ session: '$SESSION_ID', roundId: '$ROUND_ID', ts: '$NOW_MS' }),
     },
     lobby: {
+      sessionStartHeadersJson: prettyJson({
+        'x-signature': '$SIGNATURE',
+        'content-type': 'application/json',
+      }),
+      sessionStartBodyJson: prettyJson({
+        gameCode: '$GAME_CODE',
+        lang: 'en',
+        gameSetting: { rtpConfigCode: '$RTP_CONFIG_CODE', isGeoBlocking: true },
+        country: 'GB',
+        isTestingPlayer: false,
+        mode: 'real',
+        operator: 'QARealGameOperator',
+        brand: 'QARealGameBrand',
+        playerId: 'QARealGameOperator:QARealGameBrand:kyle0c',
+        currency: 'EUR',
+        currencyId: 1,
+        externalPlayerId: 'kyle0c',
+        balance: '10000',
+        maxExposure: 0,
+        licenseConfig: {},
+        callback: 'https://httpbin.org/status/200',
+      }),
+      sessionActivateHeadersJson: prettyJson({ 'content-type': 'application/json' }),
+      sessionActivateBodyJson: prettyJson({
+        token: '$SESSION_TOKEN',
+        ts: 0,
+        timezone: 'us',
+        analytics: {
+          language: 'us',
+          device: 'mobile',
+          resolution: { w: 0, h: 0 },
+          orientation: 'landscape',
+          connection: 'slow-2g',
+        },
+      }),
       tokenActivateHeadersJson: prettyJson({ authorization: 'Bearer $GAME_ACCESS_TOKEN' }),
       tokenActivateBodyJson: 'null',
       tokenRefreshHeadersJson: prettyJson({ authorization: 'Bearer $LOBBY_ACCESS_TOKEN' }),
@@ -799,7 +800,7 @@ function defaultConfig() {
     maintenance: {
       userId: maintenance.AM_USER_ID || '0',
       account: maintenance.AM_ACCOUNT || 'kyle.c',
-      code: maintenance.AM_CODE || 'SLT',
+      code: maintenance.AM_CODE || '*',
       routeKey: maintenance.AM_ROUTE_KEY || '*',
       amTokenHeadersJson: prettyJson({ accept: 'application/json', 'x-signature': '$SIGNATURE' }),
       amTokenBodyJson: prettyJson({
@@ -835,41 +836,8 @@ async function handleApi(req, res, pathname) {
       }
     }
 
-    if (req.method === 'GET' && pathname === '/api/cache') {
-      const url = new URL(req.url, 'http://localhost');
-      const flow = url.searchParams.get('flow');
-      let cacheFile = '';
-      if (flow === 'bet') cacheFile = path.join(RGS_DIR, '.token-cache.json');
-      else if (flow === 'lobby') cacheFile = path.join(LOBBY_DIR, '.lobby-token-cache.json');
-      else if (flow === 'maintenance')
-        cacheFile = path.join(MAINTENANCE_DIR, '.am-token-cache.json');
-
-      if (cacheFile && fs.existsSync(cacheFile))
-        return jsonResponse(res, 200, { cache: readJsonFile(cacheFile) });
-      return jsonResponse(res, 200, { cache: null });
-    }
-
     if (req.method === 'GET' && pathname === '/api/config')
       return jsonResponse(res, 200, defaultConfig());
-    if (req.method === 'GET' && pathname === '/api/records') {
-      const url = new URL(req.url, 'http://localhost');
-      return jsonResponse(res, 200, {
-        records: listRecords(url.searchParams.get('flow') || 'bet'),
-      });
-    }
-    if (req.method === 'GET' && pathname === '/api/record') {
-      const url = new URL(req.url, 'http://localhost');
-      const flow = url.searchParams.get('flow') || 'bet';
-      const file = path.basename(url.searchParams.get('file') || '');
-      const resultPath = path.join(recordConfig(flow).resultDir, file);
-      if (!fs.existsSync(resultPath)) return jsonResponse(res, 404, { error: 'Not found.' });
-      return jsonResponse(res, 200, {
-        result: readJsonFile(resultPath),
-        logs: readJsonFile(path.join(recordConfig(flow).traceDir, `${file}.trace.json`)) || [],
-        resultFile: path.relative(REPO_ROOT, resultPath),
-        requestedAt: displayTimeFromDate(fs.statSync(resultPath).mtime),
-      });
-    }
 
     if (req.method === 'POST' && pathname === '/api/rgs-bet')
       return jsonResponse(res, 200, await runBetFlow(await parseJsonBody(req)));
@@ -884,6 +852,7 @@ async function handleApi(req, res, pathname) {
       error: error.message,
       details: error.details || null,
       logs: error.logs || null,
+      state: error.state || null,
       requestedAt: error.requestedAt || displayTime(),
       respondedAt: displayTime(),
     });
@@ -916,7 +885,7 @@ const server = http.createServer((req, res) => {
 
 if (require.main === module) {
   const port = Number(process.env.PORT || 3000);
-  server.listen(port, '127.0.0.1', () =>
+  server.listen(port, '0.0.0.0', () =>
     console.log(`API test web is running at http://localhost:${port}`),
   );
 }

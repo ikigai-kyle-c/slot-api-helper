@@ -7,13 +7,6 @@
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
-    <div id="floating-cache-viewer" class="floating-window">
-      <div class="floating-header">
-        <h3 style="margin:0; color:#10b981;">💾 Flow Cache</h3>
-        <button type="button" class="modal-close" id="btn-close-cache" style="font-size:18px;">&times;</button>
-      </div>
-      <div class="floating-body"><div id="backend-cache-content" style="padding:0; overflow:auto;">{}</div></div>
-    </div>
     
     <div id="state-modal" class="modal-overlay">
       <div class="modal-content" style="max-width: 600px; height: 70vh;">
@@ -44,11 +37,14 @@
               <label class="toggle-row"><input type="radio" name="layoutMode" value="vertical"> <span>Vertical Tabs</span></label>
               <label class="toggle-row"><input type="radio" name="layoutMode" value="horizontal" checked> <span>Horizontal Tabs (Default)</span></label>
             </div>
+            <div class="control-grid" style="margin-top: 8px;">
+              <label class="toggle-row"><input type="checkbox" id="setting-trim-tabs"> <span>Trim long tab labels (uncheck to show full text)</span></label>
+            </div>
           </div>
           <div class="card mt-4" style="flex-shrink: 0;">
             <h3>Recent Executions Limit</h3>
             <div class="control-grid">
-              <label>History Limit (Local Storage) <input type="number" id="setting-history-limit" value="100" min="10" max="500"></label>
+              <label>History Limit (Flow Storage) <input type="number" id="setting-history-limit" value="100" min="10" max="500"></label>
             </div>
           </div>
         </div>
@@ -86,10 +82,18 @@
           <button class="tab" data-tab="lobby" type="button">🏠 RGS Lobby Flow</button>
           <button class="tab" data-tab="maintenance" type="button">🛡️ Maintenance</button>
         </nav>
-        <div class="recent-wrapper">
-          <button id="btn-toggle-recent" class="btn-settings" style="border-color: #10b981; color: #10b981;">🕘 Recent Executions ▼</button>
-          <div id="recent-dropdown" class="records-dropdown">
-            <div id="records-list" class="records-list-vertical"></div>
+        <div class="nav-actions">
+          <div class="recent-wrapper" id="cache-wrapper">
+            <button id="btn-toggle-cache" class="btn-settings" style="border-color: #10b981; color: #10b981;">💾 Flow Cache ▼</button>
+            <div id="cache-dropdown" class="records-dropdown">
+              <div id="backend-cache-content" style="padding:0; overflow:auto;">{}</div>
+            </div>
+          </div>
+          <div class="recent-wrapper">
+            <button id="btn-toggle-recent" class="btn-settings" style="border-color: #10b981; color: #10b981;">🕘 Recent Executions ▼</button>
+            <div id="recent-dropdown" class="records-dropdown">
+              <div id="records-list" class="records-list-vertical"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -150,7 +154,6 @@
                 </details>
               </div>
               <div class="form-actions flex-between" id="bet-actions">
-                <button class="btn-settings btn-view-cache" type="button" data-flow="bet">💾 View Flow Cache</button>
                 <button class="primary btn-large" type="submit" style="flex: 1;">🚀 Execute Checked Steps</button>
               </div>
             </form>
@@ -202,7 +205,6 @@
                 </details>
               </div>
               <div class="form-actions flex-between" id="lobby-actions">
-                <button class="btn-settings btn-view-cache" type="button" data-flow="lobby">💾 View Flow Cache</button>
                 <button class="primary btn-large" type="submit" style="flex: 1;">🚀 Execute Checked Steps</button>
               </div>
             </form>
@@ -251,7 +253,6 @@
                 </details>
               </div>
               <div class="form-actions flex-between" id="maintenance-actions">
-                <button class="btn-settings btn-view-cache" type="button" data-flow="maintenance">💾 View Flow Cache</button>
                 <button class="primary btn-large" type="submit" style="flex: 1;">🛡️ Execute Checked Steps</button>
               </div>
             </form>
