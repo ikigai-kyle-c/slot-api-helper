@@ -252,3 +252,54 @@ body.no-trim .step-tab span { overflow: visible; text-overflow: clip; }
 .state-mapper-row select, .state-mapper-row input { flex: 1; padding: 6px 8px; font-size: 11px; font-family: monospace; border: 1px solid var(--line); border-radius: 4px; background: #0f172a; color: var(--fg); }
 .state-mapper-row button { background: #ef4444; color: white; border: none; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; }
 .state-mapper-add { align-self: flex-start; background: #10b981; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: bold; margin-top: 4px; }
+
+/* ---------------------------------------------------------------
+   RESPONSIVE: vertical / portrait monitors + narrow widths.
+   Stack controls over workspace, single-column JSON, drop the
+   horizontal resizers (meaningless when stacked).
+   --------------------------------------------------------------- */
+@media (max-width: 1100px), (orientation: portrait) {
+  .app-shell { padding: 12px; }
+
+  /* Split the height: both stacks visible at a glance, each scrolls internally. */
+  .content-layout { flex-direction: column; overflow: hidden; gap: 12px; }
+
+  .controls-column,
+  .workspace-column {
+    width: 100% !important;
+    min-width: 0;
+    min-height: 0;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .controls-column { flex: 1 1 45%; overflow-y: auto; }
+  .workspace-column { flex: 1 1 55%; overflow: hidden; }
+
+  /* Main resizer becomes a horizontal drag bar between the stacked sections */
+  .main-splitter {
+    width: 100% !important;
+    height: 6px;
+    cursor: row-resize;
+    flex-shrink: 0;
+    align-self: stretch;
+  }
+  /* Per-step input/output resizers don't apply when stacked single-column */
+  .json-splitter { display: none !important; }
+
+  /* JSON input/output stack instead of sitting side-by-side */
+  .json-grid { grid-template-columns: 1fr !important; }
+  .steps-container.layout-showall .json-grid { flex-direction: column !important; }
+
+  /* Header action rows wrap instead of overflowing */
+  .tabs-nav-row { flex-wrap: wrap; gap: 8px; }
+  .nav-actions { flex-wrap: wrap; }
+
+  /* Dropdowns shouldn't exceed the viewport on narrow screens */
+  .records-dropdown { max-width: 92vw; }
+}
+
+/* Very narrow phones / split panes */
+@media (max-width: 560px) {
+  .control-grid { grid-template-columns: 1fr; }
+  .tabs { flex-wrap: wrap; }
+}

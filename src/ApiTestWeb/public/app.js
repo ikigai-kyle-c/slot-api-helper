@@ -26,6 +26,10 @@ const SPLITTER_DEFAULTS = {
   'json-splitter-0': 'calc(29.7403% - 3px)',
   'main-splitter': 'calc(57.4705% - 3px)',
 };
+// Stacked (column) layout: controls' height fraction of the viewport.
+const SPLITTER_DEFAULTS_V = {
+  'main-splitter': 'calc(45% - 3px)',
+};
 
 function currentEnvType() {
   const r = document.querySelector('input[name="envType"]:checked');
@@ -682,45 +686,55 @@ if (cacheDropdown && cacheContentEl) {
 
 
 
-// Splitter Logic
+// Splitter Logic — orientation-aware: resizes width in side-by-side (row) layouts,
+// height in stacked (column) layouts (vertical/portrait monitors).
 function initSplitter(splitter, leftEl, rightEl, isPercent = false) {
   let isDragging = false;
+  const splitterKey = splitter.id || Array.from(splitter.parentNode.children).indexOf(splitter);
+  const isColumn = () => getComputedStyle(splitter.parentElement).flexDirection === 'column';
+
+  const applySaved = () => {
+    if (isColumn()) {
+      const s = localStorage.getItem(`splitter_${splitterKey}_v`) || SPLITTER_DEFAULTS_V[splitterKey];
+      if (s) { leftEl.style.height = s; leftEl.style.minHeight = '0'; leftEl.style.flex = 'none'; leftEl.style.width = ''; }
+    } else {
+      const s = localStorage.getItem(`splitter_${splitterKey}`) || SPLITTER_DEFAULTS[splitterKey];
+      if (s) { leftEl.style.width = s; leftEl.style.minWidth = '0'; leftEl.style.flex = 'none'; leftEl.style.height = ''; }
+    }
+  };
+  splitter._applySaved = applySaved; // allow re-apply on orientation change
+
   splitter.addEventListener('mousedown', (e) => {
     isDragging = true;
     splitter.classList.add('is-dragging');
-    document.body.style.cursor = 'col-resize';
+    document.body.style.cursor = isColumn() ? 'row-resize' : 'col-resize';
     e.preventDefault();
   });
   document.addEventListener('mousemove', (e) => {
     if (!isDragging) return;
-    const container = splitter.parentElement;
-    const rect = container.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    if (isPercent) {
-      const widthStr = `calc(${(x / rect.width) * 100}% - ${splitter.offsetWidth / 2}px)`;
-      leftEl.style.width = widthStr;
-      leftEl.style.minWidth = '0';
-      leftEl.style.flex = 'none';
+    const rect = splitter.parentElement.getBoundingClientRect();
+    if (isColumn()) {
+      const y = e.clientY - rect.top;
+      leftEl.style.height = `calc(${(y / rect.height) * 100}% - ${splitter.offsetHeight / 2}px)`;
+      leftEl.style.minHeight = '0'; leftEl.style.flex = 'none'; leftEl.style.width = '';
     } else {
-       leftEl.style.flex = 'none';
-       leftEl.style.width = `${Math.max(40, Math.min(x, rect.width - 200))}px`;
+      const x = e.clientX - rect.left;
+      leftEl.style.width = isPercent
+        ? `calc(${(x / rect.width) * 100}% - ${splitter.offsetWidth / 2}px)`
+        : `${Math.max(40, Math.min(x, rect.width - 200))}px`;
+      leftEl.style.minWidth = '0'; leftEl.style.flex = 'none'; leftEl.style.height = '';
     }
   });
   document.addEventListener('mouseup', () => {
-    if (isDragging) {
-      isDragging = false;
-      splitter.classList.remove('is-dragging');
-      document.body.style.cursor = 'default';
-      localStorage.setItem(`splitter_${splitter.id || Array.from(splitter.parentNode.children).indexOf(splitter)}`, leftEl.style.width);
-    }
+    if (!isDragging) return;
+    isDragging = false;
+    splitter.classList.remove('is-dragging');
+    document.body.style.cursor = 'default';
+    if (isColumn()) localStorage.setItem(`splitter_${splitterKey}_v`, leftEl.style.height);
+    else localStorage.setItem(`splitter_${splitterKey}`, leftEl.style.width);
   });
-  const splitterKey = splitter.id || Array.from(splitter.parentNode.children).indexOf(splitter);
-  const saved = localStorage.getItem(`splitter_${splitterKey}`) || SPLITTER_DEFAULTS[splitterKey];
-  if (saved) {
-    leftEl.style.width = saved;
-    leftEl.style.minWidth = '0';
-    leftEl.style.flex = 'none';
-  }
+
+  applySaved();
 }
 
 // Inject JSON splitters
@@ -740,6 +754,14 @@ const controlsColumn = document.getElementById('controls-column');
 const workspaceColumn = document.getElementById('workspace-column');
 if (mainSplitter && controlsColumn && workspaceColumn) {
   initSplitter(mainSplitter, controlsColumn, workspaceColumn, true);
+  // Re-apply the correct (width vs height) saved size when orientation/layout flips.
+  let reapplyTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(reapplyTimer);
+    reapplyTimer = setTimeout(() => {
+      document.querySelectorAll('.main-splitter, .json-splitter').forEach(s => s._applySaved && s._applySaved());
+    }, 150);
+  });
 }
 
 function initStateMappers() {
