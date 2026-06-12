@@ -3,11 +3,12 @@ const resultEl = document.querySelector('#result-output');
 const wsTrace = document.querySelector('#ws-trace');
 const resultFileEl = document.querySelector('#result-file');
 const recordsListEl = document.querySelector('#records-list');
-const betForm = document.querySelector('#bet-form');
-const lobbyForm = document.querySelector('#lobby-form');
-const maintenanceForm = document.querySelector('#maintenance-form');
 const runtimeStateEl = document.querySelector('#runtime-state');
-const tabs = document.querySelectorAll('.tab');
+// Flow registries — populated by renderFlows() after fetching /api/flows.
+let FLOW_DEFS = [];
+let FLOW_BY_KEY = {};
+const FORMS = {}; // flowKey -> <form>
+const PANELS = {}; // flowKey -> <section>
 
 const btnClearCache = document.querySelector('#btn-clear-cache');
 const globalDomainEl = document.querySelector('#global-domain');
@@ -36,16 +37,95 @@ function currentEnvType() {
   return r ? r.value : 'LOCAL';
 }
 
+// ---- Dynamic flow UI (built from /api/flows) ----
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+
+function stepGroupHtml(step) {
+  return `
+    <details class="step-group" open>
+      <summary class="step-summary"><label class="step-checkbox"><input type="checkbox" name="run_${esc(step.key)}" checked> ${esc(step.label)}</label></summary>
+      <div class="control-grid json-grid">
+        <label class="json-field">Headers <textarea name="${esc(step.headersKey)}"></textarea></label>
+        <label class="json-field">Body <textarea name="${esc(step.bodyKey)}"></textarea></label>
+      </div>
+    </details>`;
+}
+
+function fieldsCardHtml(flow) {
+  if (!flow.fields || !flow.fields.length) return '';
+  const rows = flow.fields.map((f) => f.type === 'checkbox'
+    ? `<label class="toggle-row"><span>${esc(f.label)}</span><input name="${esc(f.name)}" type="checkbox"></label>`
+    : `<label>${esc(f.label)} <input name="${esc(f.name)}" autocomplete="off"></label>`).join('');
+  return `<div class="card mb-4" style="flex-shrink:0;"><h3>Admin Target</h3><div class="control-grid maintenance-grid">${rows}</div></div>`;
+}
+
+function panelHtml(flow) {
+  return `
+    <section id="${esc(flow.key)}-panel" class="panel">
+      <form id="${esc(flow.key)}-form" class="flow-form">
+        ${fieldsCardHtml(flow)}
+        <details class="card local-overrides">
+          <summary><h3>🔧 Execution Overrides (Target Environment)</h3></summary>
+          <div class="control-grid mt-4">
+            <div class="json-field span-full">
+              <label>State Extraction Mapping (JSON) <span class="text-xs" style="color:var(--muted); font-weight:normal">(e.g. {"SESSION_TOKEN": "start.data.token"})</span></label>
+              <textarea name="stateExtractMapping" placeholder='{"SESSION_TOKEN": "start.data.token"}' style="min-height: 50px"></textarea>
+            </div>
+            <label>API domain <input name="apiDomain" placeholder="Override global..." autocomplete="off"></label>
+            <label>Signature <input name="signature" placeholder="Override global..." autocomplete="off"></label>
+            <label>Game code <input name="gameCode" placeholder="Override global..." autocomplete="off"></label>
+          </div>
+        </details>
+        <div class="card steps-container layout-horizontal">
+          ${flow.steps.map(stepGroupHtml).join('')}
+        </div>
+        <div class="form-actions flex-between" id="${esc(flow.key)}-actions">
+          <button class="primary btn-large" type="submit" style="flex: 1;">${esc(flow.executeIcon || '🚀')} Execute Checked Steps</button>
+        </div>
+      </form>
+    </section>`;
+}
+
+function renderFlows(flows) {
+  FLOW_DEFS = flows;
+  FLOW_BY_KEY = Object.fromEntries(flows.map((f) => [f.key, f]));
+  const tabsNav = document.querySelector('#flow-tabs');
+  const controls = document.querySelector('#controls-column');
+  tabsNav.innerHTML = `<select id="flow-select" class="flow-select" aria-label="Active flow">${
+    flows.map((f) => `<option value="${esc(f.key)}">${esc(f.icon || '')} ${esc(f.label)}</option>`).join('')
+  }</select>`;
+  controls.innerHTML = flows.map(panelHtml).join('');
+  flows.forEach((f, i) => {
+    FORMS[f.key] = controls.querySelector(`#${f.key}-form`);
+    PANELS[f.key] = controls.querySelector(`#${f.key}-panel`);
+    if (i === 0) PANELS[f.key].classList.add('is-active');
+    tabState[f.key] = { result: '{}', traceHtml: '', meta: '', statusText: 'Idle', statusClass: 'idle' };
+  });
+  activeTab = flows[0]?.key || '';
+}
+
+// Pre-fill each flow's form with the manifest defaults (step header/body + fields).
+function fillFlowDefaults(flow) {
+  const form = FORMS[flow.key];
+  if (!form) return;
+  for (const step of flow.steps) {
+    const h = form.elements[step.headersKey];
+    const b = form.elements[step.bodyKey];
+    if (h) h.value = step.defaultHeadersJson || '';
+    if (b) b.value = step.defaultBodyJson || '';
+  }
+  for (const f of flow.fields || []) {
+    const el = form.elements[f.name];
+    if (!el) continue;
+    if (f.type === 'checkbox') el.checked = Boolean(f.default);
+    else el.value = f.default ?? '';
+  }
+}
+
 const wsTabs = document.querySelectorAll('.ws-tab');
 const wsPanels = { result: document.querySelector('#ws-result'), trace: wsTrace };
-const panels = { bet: document.querySelector('#bet-panel'), lobby: document.querySelector('#lobby-panel'), maintenance: document.querySelector('#maintenance-panel') };
-
-let activeTab = 'bet';
-const tabState = {
-  bet: { result: '{}', traceHtml: '', meta: '', statusText: 'Idle', statusClass: 'idle' },
-  maintenance: { result: '{}', traceHtml: '', meta: '', statusText: 'Idle', statusClass: 'idle' },
-  lobby: { result: '{}', traceHtml: '', meta: '', statusText: 'Idle', statusClass: 'idle' },
-};
+let activeTab = '';
+const tabState = {}; // flowKey -> snapshot, seeded in renderFlows()
 
 function saveActiveTabState() {
   const currentClass = statusEl.className.replace('status badge ', '');
@@ -171,15 +251,18 @@ function setBusy(isBusy) {
 }
 
 function restoreButtonText() {
-  betForm.querySelector('button[type="submit"]').textContent = '🚀 Execute Checked Steps';
-  lobbyForm.querySelector('button[type="submit"]').textContent = '🚀 Execute Checked Steps';
-  maintenanceForm.querySelector('button[type="submit"]').textContent = '🛡️ Execute Checked Steps';
+  FLOW_DEFS.forEach((flow) => {
+    const btn = FORMS[flow.key]?.querySelector('button[type="submit"]');
+    if (btn) btn.textContent = `${flow.executeIcon || '🚀'} Execute Checked Steps`;
+  });
 }
 
 function formValues(form, flowName) {
-  // Maintenance (AM) lives on a different host than the game RGS. Resolve per env; LOCAL -> 8080.
-  const apiDomain = flowName === 'maintenance'
-    ? (ENV_CONFIG[currentEnvType()]?.amUrl || 'http://localhost:8080')
+  // A flow may live on a different host (e.g. maintenance AM service). domainField
+  // names which ENV_CONFIG url to use; otherwise the global env domain.
+  const flow = FLOW_BY_KEY[flowName];
+  const apiDomain = flow && flow.domainField
+    ? (ENV_CONFIG[currentEnvType()]?.[flow.domainField] || flow.defaultDomain || '')
     : globalDomainEl.value;
   const data = { apiDomain, signature: globalSignatureEl.value, gameCode: globalGameCodeEl.value, steps: [] };
   
@@ -212,15 +295,6 @@ async function getJson(url) {
   return data;
 }
 
-function fillForm(form, values) {
-  for (const [key, value] of Object.entries(values)) {
-    if (['apiDomain', 'signature', 'gameCode'].includes(key)) continue;
-    const element = form.elements[key];
-    if (!element) continue;
-    if (element.type === 'checkbox') element.checked = Boolean(value); else element.value = value;
-  }
-}
-
 document.addEventListener('blur', (event) => {
   if (event.target.tagName !== 'TEXTAREA') return;
   const raw = event.target.value.trim();
@@ -237,15 +311,19 @@ async function loadConfig() {
     });
   }
 
-  const config = await getJson('/api/config');
-  fillForm(betForm, config.rgs);
-  fillForm(lobbyForm, config.lobby);
-  fillForm(maintenanceForm, config.maintenance);
+  // Build the entire flow UI from the declarative manifest.
+  const flows = await getJson('/api/flows');
+  renderFlows(flows);
+  wireFlowEvents();
+  flows.forEach(fillFlowDefaults);
+
   restoreCachedInputs();
   const activeRadio = document.querySelector('input[name="envType"]:checked');
-  if(activeRadio) loadEnvSpecificCache(activeRadio.value);
+  if (activeRadio) loadEnvSpecificCache(activeRadio.value);
   // Re-render mapping rows from restored textarea values (must run AFTER restoreCachedInputs).
   initStateMappers();
+  initJsonSplitters();
+  applyLayoutMode(localStorage.getItem('console_layout_mode') || 'horizontal');
 }
 
 // Healthcheck
@@ -268,7 +346,7 @@ const recentDropdown = document.querySelector('#recent-dropdown');
 btnToggleRecent.addEventListener('click', () => recentDropdown.classList.toggle('is-active'));
 document.addEventListener('click', (e) => {
   // Keep open when switching flow tabs; only close on genuine outside clicks.
-  if (!e.target.closest('.recent-wrapper') && !e.target.closest('.tab')) recentDropdown.classList.remove('is-active');
+  if (!e.target.closest('.recent-wrapper') && !e.target.closest('#flow-select')) recentDropdown.classList.remove('is-active');
 });
 
 function renderRecords(records) {
@@ -391,15 +469,23 @@ function renderTraceLogs(logs) {
 
 
 
-tabs.forEach((tab) => {
-  tab.addEventListener('click', () => {
-    saveActiveTabState(); activeTab = tab.dataset.tab;
-    tabs.forEach((item) => item.classList.toggle('is-active', item === tab));
-    Object.entries(panels).forEach(([key, panel]) => panel.classList.toggle('is-active', key === activeTab));
+// Wire flow tabs + submit handlers. Called after renderFlows() builds the DOM.
+function wireFlowEvents() {
+  const sel = document.querySelector('#flow-select');
+  sel.addEventListener('change', () => {
+    saveActiveTabState();
+    activeTab = sel.value;
+    Object.entries(PANELS).forEach(([key, panel]) => panel.classList.toggle('is-active', key === activeTab));
     restoreTabState(activeTab); loadRecords();
     switchFlowCacheTo(activeTab);
   });
-});
+  FLOW_DEFS.forEach((flow) => {
+    FORMS[flow.key].addEventListener('submit', (e) => {
+      e.preventDefault();
+      executeFlow(FORMS[flow.key], `/api/flow/${flow.key}`, flow.key);
+    });
+  });
+}
 
 function extractPaths(obj, prefix = "") {
   let paths = [];
@@ -477,11 +563,8 @@ async function executeFlow(form, apiPath, flowName) {
   } finally { setBusy(false); restoreButtonText(); forceResultTab(); }
 }
 
-betForm.addEventListener('submit', (e) => { e.preventDefault(); executeFlow(betForm, '/api/rgs-bet', 'bet'); });
-lobbyForm.addEventListener('submit', (e) => { e.preventDefault(); executeFlow(lobbyForm, '/api/rgs-lobby', 'lobby'); });
-maintenanceForm.addEventListener('submit', (e) => { e.preventDefault(); executeFlow(maintenanceForm, '/api/maintenance', 'maintenance'); });
-
-Promise.all([loadConfig(), loadRecords()]).catch(() => setStatus('Error', 'error'));
+// Boot: loadConfig() fetches /api/flows, renders the whole UI, then wires events.
+loadConfig().then(() => loadRecords()).catch(() => setStatus('Error', 'error'));
 
 document.querySelectorAll('pre[tabindex="0"]').forEach((pre) => {
   pre.addEventListener('keydown', (e) => {
@@ -677,7 +760,7 @@ if (cacheDropdown && cacheContentEl) {
   });
   // Stay open across flow-tab switches; close only on genuine outside clicks.
   document.addEventListener('click', (e) => {
-    if (!e.target.closest('#cache-wrapper') && !e.target.closest('.tab')) {
+    if (!e.target.closest('#cache-wrapper') && !e.target.closest('#flow-select')) {
       cacheDropdown.classList.remove('is-active');
     }
   });
@@ -737,16 +820,19 @@ function initSplitter(splitter, leftEl, rightEl, isPercent = false) {
   applySaved();
 }
 
-// Inject JSON splitters
-document.querySelectorAll('.json-grid').forEach((grid, idx) => {
-  const splitter = document.createElement('div');
-  splitter.className = 'json-splitter';
-  splitter.id = `json-splitter-${idx}`;
-  const firstChild = grid.children[0];
-  const secondChild = grid.children[1];
-  grid.insertBefore(splitter, secondChild);
-  initSplitter(splitter, firstChild, secondChild, true);
-});
+// Inject JSON splitters — runs after the flow forms are rendered.
+function initJsonSplitters() {
+  document.querySelectorAll('.json-grid').forEach((grid, idx) => {
+    if (grid.querySelector('.json-splitter')) return; // already injected
+    const splitter = document.createElement('div');
+    splitter.className = 'json-splitter';
+    splitter.id = `json-splitter-${idx}`;
+    const firstChild = grid.children[0];
+    const secondChild = grid.children[1];
+    grid.insertBefore(splitter, secondChild);
+    initSplitter(splitter, firstChild, secondChild, true);
+  });
+}
 
 // Init Main Splitter
 const mainSplitter = document.getElementById('main-splitter');

@@ -3,6 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
+const { FLOWS, FLOW_MAP, applyExtract } = require('./flows');
 
 function displayTime() {
   const d = new Date();
@@ -200,624 +201,109 @@ function processStateExtraction(mappingJsonStr, resultObj, stateObj, currentStep
     console.error("Failed to parse state mapping:", e.message);
   }
 }
-function extractAccessToken(body) {
-  return body?.token || body?.accessToken || body?.data?.token || body?.data?.accessToken || '';
-}
-function extractLaunchToken(launchUrl) {
-  if (!launchUrl) return '';
-  try {
-    return new URL(launchUrl).searchParams.get('token') || '';
-  } catch {
-    const match = launchUrl.match(/[?&]token=([^&]+)/);
-    return match ? decodeURIComponent(match[1]) : '';
-  }
-}
-function extractSessionToken(body) {
-  return (
-    body?.token ||
-    body?.sessionToken ||
-    body?.data?.token ||
-    body?.data?.sessionToken ||
-    extractLaunchToken(body?.data?.launchUrl) ||
-    ''
-  );
-}
-function extractSessionId(body) {
-  return body?.sessionId || body?.session || body?.data?.sessionId || body?.data?.session || '';
-}
 function nowMs() {
   return Date.now();
 }
 
-
-
 // -------------------------------------------------------------
-// FLOW RUNNERS (Stateless)
+// GENERIC FLOW ENGINE — runs any flow defined in flows.js
 // -------------------------------------------------------------
+async function runFlow(flowKey, input) {
+  const flow = FLOW_MAP[flowKey];
+  if (!flow) throw httpError(`Unknown flow: ${flowKey}`, { status: 404 });
 
-async function runBetFlow(input) {
   const requestedAt = displayTime();
   const config = {
-    apiDomain: resolveDomain(input.apiDomain, 'localhost:19080'),
+    apiDomain: resolveDomain(input.apiDomain, flow.defaultDomain),
     signature: input.signature || 'rgs-local-signature',
     gameCode: input.gameCode || 'LGS-006',
-    sessionStartHeadersJson: input.sessionStartHeadersJson || '',
-    sessionStartBodyJson: input.sessionStartBodyJson || '',
-    sessionActivateHeadersJson: input.sessionActivateHeadersJson || '',
-    sessionActivateBodyJson: input.sessionActivateBodyJson || '',
-    betHeadersJson: input.betHeadersJson || '',
-    betBodyJson: input.betBodyJson || '',
-    actionHeadersJson: input.actionHeadersJson || '',
-    actionBodyJson: input.actionBodyJson || '',
-    finishHeadersJson: input.finishHeadersJson || '',
-    finishBodyJson: input.finishBodyJson || '',
   };
+  for (const f of flow.fields || []) {
+    const raw = input[f.name];
+    if (f.type === 'checkbox') config[f.name] = Boolean(raw);
+    else config[f.name] = raw === undefined || raw === null || raw === '' ? f.default : raw;
+  }
+  for (const step of flow.steps) {
+    config[step.headersKey] = input[step.headersKey] || '';
+    config[step.bodyKey] = input[step.bodyKey] || '';
+  }
+
   const baseUrl = normalizeBaseUrl(config.apiDomain);
   const logs = [];
   const result = {};
-
-  // State provided by UI IDE Context
   const state = typeof input.state === 'object' && input.state ? input.state : {};
-  const steps = Array.isArray(input.steps)
-    ? input.steps
-    : ['start', 'activate', 'bet', 'action', 'finish'];
+  const steps = Array.isArray(input.steps) ? input.steps : flow.steps.map((s) => s.key);
 
   const vars = () => ({
     ...state,
     GAME_CODE: config.gameCode,
-    RTP_CONFIG_CODE: config.gameCode === 'LGS-001' ? 'highRTP' : 'RTP_97',
     SIGNATURE: config.signature,
     NOW_MS: nowMs(),
+    ...(flow.vars ? flow.vars(config) : {}),
   });
 
-  if (steps.includes('start')) {
+  for (const step of flow.steps) {
+    if (!steps.includes(step.key)) continue;
+    if (step.runIf && !step.runIf(state)) continue;
+
+    const v = vars();
     const headers = {
-      'x-signature': config.signature,
-      'content-type': 'application/json',
-      ...resolveTemplates(
-        optionalObjectJson(config, 'sessionStartHeadersJson', 'Start Headers') || {},
-        vars(),
-      ),
+      ...resolveTemplates(step.baseHeaders || {}, v),
+      ...resolveTemplates(optionalObjectJson(config, step.headersKey, `${step.label} Headers`) || {}, v),
     };
-    const payload = resolveTemplates(
-      optionalObjectJson(config, 'sessionStartBodyJson', 'Start Body') || {},
-      vars(),
-    );
-    logs.push({ step: 'session.start.request', headers, payload });
-    const res = await requestJson({
-      method: 'POST',
-      url: `${baseUrl}/v2/service/session/start`,
-      headers,
-      body: payload,
-    });
-    logs.push({ step: 'session.start.response', status: res.status, body: res.body });
-    const block = detectMaintenanceBlock('session.start', res.status, res.body);
-    if (block) throw httpError(`MAINTENANCE BLOCKED`, block, logs, state);
-    if (res.status !== 200)
-      throw httpError(`Start failed`, { status: res.status, response: res.body }, logs, state);
+    const parsedBody = optionalObjectJson(config, step.bodyKey, `${step.label} Body`);
+    const payload = resolveTemplates(step.allowNullBody ? parsedBody : parsedBody || {}, v);
+    const url = `${baseUrl}${typeof step.path === 'function' ? step.path(config) : step.path}`;
 
-    state.SESSION_TOKEN = extractSessionToken(res.body) || state.SESSION_TOKEN;
-    state.SESSION_ID = extractSessionId(res.body) || state.SESSION_ID;
-    result.start = res.body;
-    processStateExtraction(input.stateExtractMapping, result, state, res.body);
-  }
+    logs.push({ step: `${step.logName}.request`, headers, payload });
+    const res = await requestJson({ method: step.method, url, headers, body: payload == null ? undefined : payload });
+    logs.push({ step: `${step.logName}.response`, status: res.status, body: res.body });
 
-  if (steps.includes('activate')) {
-    const headers = {
-      'content-type': 'application/json',
-      ...resolveTemplates(
-        optionalObjectJson(config, 'sessionActivateHeadersJson', 'Activate Headers') || {},
-        vars(),
-      ),
-    };
-    const payload = resolveTemplates(
-      optionalObjectJson(config, 'sessionActivateBodyJson', 'Activate Body') || {},
-      vars(),
-    );
-    logs.push({ step: 'session.activate.request', headers, payload });
-    const res = await requestJson({
-      method: 'POST',
-      url: `${baseUrl}/v2/exp/session/activate`,
-      headers,
-      body: payload,
-    });
-    logs.push({ step: 'session.activate.response', status: res.status, body: res.body });
-    const block = detectMaintenanceBlock('session.activate', res.status, res.body);
-    if (block) throw httpError(`MAINTENANCE BLOCKED`, block, logs, state);
-    if (res.status !== 200)
-      throw httpError(`Activate failed`, { status: res.status, response: res.body }, logs, state);
-
-    state.ACCESS_TOKEN = extractAccessToken(res.body) || state.ACCESS_TOKEN;
-    if (!state.SESSION_ID) state.SESSION_ID = extractSessionId(res.body) || state.SESSION_ID;
-    result.activate = res.body;
-    processStateExtraction(input.stateExtractMapping, result, state, res.body);
-  }
-
-  if (steps.includes('bet')) {
-    const headers = {
-      'content-type': 'application/json',
-      ...resolveTemplates(
-        optionalObjectJson(config, 'betHeadersJson', 'Bet Headers') || {},
-        vars(),
-      ),
-    };
-    const payload = resolveTemplates(
-      optionalObjectJson(config, 'betBodyJson', 'Bet Body') || {},
-      vars(),
-    );
-    logs.push({ step: 'play.bet.request', headers, payload });
-    const res = await requestJson({
-      method: 'POST',
-      url: `${baseUrl}/v2/exp/play/bet`,
-      headers,
-      body: payload,
-    });
-    logs.push({ step: 'play.bet.response', status: res.status, body: res.body });
-    const block = detectMaintenanceBlock('play.bet', res.status, res.body);
-    if (block) throw httpError(`MAINTENANCE BLOCKED`, block, logs, state);
-    if (res.status !== 200)
-      throw httpError(`Bet failed`, { status: res.status, response: res.body }, logs, state);
-
-    state.ROUND_ID = res.body?.data?.roundId || state.ROUND_ID;
-    const actionVal =
-      res.body?.data?.action ??
-      res.body?.data?.actions?.[0]?.action ??
-      res.body?.data?.actions?.[0];
-    if (actionVal !== undefined) state.ACTION = actionVal;
-    result.bet = res.body;
-    processStateExtraction(input.stateExtractMapping, result, state, res.body);
-  }
-
-  if (steps.includes('action')) {
-    if (state.ACTION !== undefined) {
-      const headers = {
-        'content-type': 'application/json',
-        ...resolveTemplates(
-          optionalObjectJson(config, 'actionHeadersJson', 'Action Headers') || {},
-          vars(),
-        ),
-      };
-      const payload = resolveTemplates(
-        optionalObjectJson(config, 'actionBodyJson', 'Action Body') || {},
-        vars(),
-      );
-      logs.push({ step: 'play.action.request', headers, payload });
-      const res = await requestJson({
-        method: 'POST',
-        url: `${baseUrl}/v2/exp/play/action`,
-        headers,
-        body: payload,
-      });
-      logs.push({ step: 'play.action.response', status: res.status, body: res.body });
-      if (res.status !== 200)
-        throw httpError(`Action failed`, { status: res.status, response: res.body }, logs, state);
-      result.action = res.body;
-      processStateExtraction(input.stateExtractMapping, result, state, res.body);
+    if (step.maintenanceCheck) {
+      const block = detectMaintenanceBlock(step.logName, res.status, res.body);
+      if (block) throw httpError('MAINTENANCE BLOCKED', block, logs, state);
     }
-  }
-
-  if (steps.includes('finish')) {
-    const headers = {
-      'content-type': 'application/json',
-      ...resolveTemplates(
-        optionalObjectJson(config, 'finishHeadersJson', 'Finish Headers') || {},
-        vars(),
-      ),
-    };
-    const payload = resolveTemplates(
-      optionalObjectJson(config, 'finishBodyJson', 'Finish Body') || {},
-      vars(),
-    );
-    logs.push({ step: 'play.finish.request', headers, payload });
-    const res = await requestJson({
-      method: 'POST',
-      url: `${baseUrl}/v2/exp/play/finish`,
-      headers,
-      body: payload,
-    });
-    logs.push({ step: 'play.finish.response', status: res.status, body: res.body });
     if (res.status !== 200)
-      throw httpError(`Finish failed`, { status: res.status, response: res.body }, logs, state);
-    result.finish = res.body;
+      throw httpError(`${step.failLabel} failed`, { status: res.status, response: res.body }, logs, state);
+
+    applyExtract(step.extract, res.body, state);
+    result[step.key] = res.body;
     processStateExtraction(input.stateExtractMapping, result, state, res.body);
   }
 
   processStateExtraction(input.stateExtractMapping, result, state);
-  return {
-    result,
-    state,
-    logs,
-    
-    requestedAt,
-    respondedAt: displayTime(),
-  };
+  return { result, state, logs, requestedAt, respondedAt: displayTime() };
 }
 
-async function runLobbyFlow(input) {
-  const requestedAt = displayTime();
-  const config = {
-    apiDomain: resolveDomain(input.apiDomain, 'localhost:19080'),
-    signature: input.signature || 'rgs-local-signature',
-    gameCode: input.gameCode || 'LGS-006',
-    sessionStartHeadersJson: input.sessionStartHeadersJson || '',
-    sessionStartBodyJson: input.sessionStartBodyJson || '',
-    sessionActivateHeadersJson: input.sessionActivateHeadersJson || '',
-    sessionActivateBodyJson: input.sessionActivateBodyJson || '',
-    tokenActivateHeadersJson: input.tokenActivateHeadersJson || '',
-    tokenActivateBodyJson: input.tokenActivateBodyJson || '',
-    tokenRefreshHeadersJson: input.tokenRefreshHeadersJson || '',
-    tokenRefreshBodyJson: input.tokenRefreshBodyJson || '',
-  };
-  const baseUrl = normalizeBaseUrl(config.apiDomain);
-  const logs = [];
-  const result = {};
-
-  const state = typeof input.state === 'object' && input.state ? input.state : {};
-  const steps = Array.isArray(input.steps)
-    ? input.steps
-    : ['start', 'activate', 'tokenActivate', 'tokenRefresh'];
-  const vars = () => ({
-    ...state,
-    GAME_CODE: config.gameCode,
-    RTP_CONFIG_CODE: config.gameCode === 'LGS-001' ? 'highRTP' : 'RTP_97',
-    SIGNATURE: config.signature,
-    NOW_MS: nowMs(),
+// Sanitized flow definitions for the frontend (no functions). Drives all
+// dynamic UI: tabs, forms, default header/body JSON, Flow Cache, extraction.
+function flowsManifest() {
+  const envByFlow = { maintenance: readEnv(path.join(MAINTENANCE_DIR, '.env')) };
+  return FLOWS.map((flow) => {
+    const env = envByFlow[flow.key] || {};
+    return {
+      key: flow.key,
+      label: flow.label,
+      icon: flow.icon,
+      executeIcon: flow.executeIcon,
+      defaultDomain: flow.defaultDomain,
+      domainField: flow.domainField || null,
+      fields: (flow.fields || []).map((f) => ({
+        name: f.name,
+        label: f.label,
+        type: f.type || 'text',
+        default: f.env && env[f.env] !== undefined ? env[f.env] : f.default,
+      })),
+      steps: flow.steps.map((s) => ({
+        key: s.key,
+        label: s.label,
+        headersKey: s.headersKey,
+        bodyKey: s.bodyKey,
+        defaultHeadersJson: JSON.stringify(s.defaultHeaders || {}, null, 2),
+        defaultBodyJson: s.defaultBody === undefined ? '' : JSON.stringify(s.defaultBody, null, 2),
+      })),
+    };
   });
-
-  if (steps.includes('start')) {
-    const headers = {
-      'x-signature': config.signature,
-      'content-type': 'application/json',
-      ...resolveTemplates(
-        optionalObjectJson(config, 'sessionStartHeadersJson', 'Start Headers') || {},
-        vars(),
-      ),
-    };
-    const payload = resolveTemplates(
-      optionalObjectJson(config, 'sessionStartBodyJson', 'Start Body') || {},
-      vars(),
-    );
-    logs.push({ step: 'session.start.request', headers, payload });
-    const res = await requestJson({
-      method: 'POST',
-      url: `${baseUrl}/v2/service/session/start`,
-      headers,
-      body: payload,
-    });
-    logs.push({ step: 'session.start.response', status: res.status, body: res.body });
-    if (res.status !== 200)
-      throw httpError(`Start failed`, { status: res.status, response: res.body }, logs, state);
-    state.SESSION_TOKEN = extractSessionToken(res.body) || state.SESSION_TOKEN;
-    state.SESSION_ID = extractSessionId(res.body) || state.SESSION_ID;
-    result.start = res.body;
-    processStateExtraction(input.stateExtractMapping, result, state, res.body);
-  }
-
-  if (steps.includes('activate')) {
-    const headers = {
-      'content-type': 'application/json',
-      ...resolveTemplates(
-        optionalObjectJson(config, 'sessionActivateHeadersJson', 'Activate Headers') || {},
-        vars(),
-      ),
-    };
-    const payload = resolveTemplates(
-      optionalObjectJson(config, 'sessionActivateBodyJson', 'Activate Body') || {},
-      vars(),
-    );
-    logs.push({ step: 'session.activate.request', headers, payload });
-    const res = await requestJson({
-      method: 'POST',
-      url: `${baseUrl}/v2/exp/session/activate`,
-      headers,
-      body: payload,
-    });
-    logs.push({ step: 'session.activate.response', status: res.status, body: res.body });
-    if (res.status !== 200)
-      throw httpError(`Activate failed`, { status: res.status, response: res.body }, logs, state);
-    state.GAME_ACCESS_TOKEN = extractAccessToken(res.body) || state.GAME_ACCESS_TOKEN;
-    result.activate = res.body;
-    processStateExtraction(input.stateExtractMapping, result, state, res.body);
-  }
-
-  if (steps.includes('tokenActivate')) {
-    const headers = resolveTemplates(
-      optionalObjectJson(config, 'tokenActivateHeadersJson', 'Token Activate Headers') || {},
-      vars(),
-    );
-    const payload = resolveTemplates(
-      optionalObjectJson(config, 'tokenActivateBodyJson', 'Token Activate Body'),
-      vars(),
-    );
-    logs.push({ step: 'token.activate.request', headers, payload });
-    const res = await requestJson({
-      method: 'POST',
-      url: `${baseUrl}/v1/exp/session-token/activate`,
-      headers,
-      body: payload || undefined,
-    });
-    logs.push({ step: 'token.activate.response', status: res.status, body: res.body });
-    if (res.status !== 200)
-      throw httpError(`Token Activate failed`, { status: res.status, response: res.body }, logs, state);
-    state.LOBBY_ACCESS_TOKEN = res.body?.data?.accessToken || state.LOBBY_ACCESS_TOKEN;
-    state.LOBBY_REFRESH_TOKEN = res.body?.data?.refreshToken || state.LOBBY_REFRESH_TOKEN;
-    result.tokenActivate = res.body;
-    processStateExtraction(input.stateExtractMapping, result, state, res.body);
-  }
-
-  if (steps.includes('tokenRefresh')) {
-    const headers = {
-      'content-type': 'application/json',
-      ...resolveTemplates(
-        optionalObjectJson(config, 'tokenRefreshHeadersJson', 'Token Refresh Headers') || {},
-        vars(),
-      ),
-    };
-    const payload = resolveTemplates(
-      optionalObjectJson(config, 'tokenRefreshBodyJson', 'Token Refresh Body') || {},
-      vars(),
-    );
-    logs.push({ step: 'token.refresh.request', headers, payload });
-    const res = await requestJson({
-      method: 'POST',
-      url: `${baseUrl}/v1/exp/session-token/refresh`,
-      headers,
-      body: payload,
-    });
-    logs.push({ step: 'token.refresh.response', status: res.status, body: res.body });
-    if (res.status !== 200)
-      throw httpError(`Token Refresh failed`, { status: res.status, response: res.body }, logs, state);
-    state.REFRESHED_ACCESS_TOKEN = res.body?.data?.accessToken || state.REFRESHED_ACCESS_TOKEN;
-    result.tokenRefresh = res.body;
-    processStateExtraction(input.stateExtractMapping, result, state, res.body);
-  }
-
-  processStateExtraction(input.stateExtractMapping, result, state);
-  return {
-    result,
-    state,
-    logs,
-    
-    requestedAt,
-    respondedAt: displayTime(),
-  };
-}
-
-async function runMaintenanceFlow(input) {
-  const requestedAt = displayTime();
-  const config = {
-    apiDomain: resolveDomain(input.apiDomain, 'localhost:8080'),
-    signature: input.signature || 'rgs-local-signature',
-    userId: input.userId ?? 0,
-    account: input.account || 'kyle.c',
-    code: input.code || '*',
-    routeKey: input.routeKey || '*',
-    gameCode: input.gameCode || 'LGS-006',
-    isMaintenance: Boolean(input.isMaintenance),
-    amTokenHeadersJson: input.amTokenHeadersJson || '',
-    amTokenBodyJson: input.amTokenBodyJson || '',
-    maintenanceHeadersJson: input.maintenanceHeadersJson || '',
-    maintenanceBodyJson: input.maintenanceBodyJson || '',
-  };
-  const baseUrl = normalizeBaseUrl(config.apiDomain);
-  const logs = [];
-  const result = {};
-
-  const state = typeof input.state === 'object' && input.state ? input.state : {};
-  const steps = Array.isArray(input.steps) ? input.steps : ['amToken', 'patch'];
-  const vars = () => ({
-    ...state,
-    GAME_CODE: config.gameCode,
-    SIGNATURE: config.signature,
-    IS_MAINTENANCE: config.isMaintenance,
-    USER_ID: Number(config.userId),
-    ACCOUNT: config.account,
-    CODE: config.code,
-    ROUTE_KEY: config.routeKey,
-  });
-
-  if (steps.includes('amToken')) {
-    const headers = {
-      'content-type': 'application/json',
-      ...resolveTemplates(
-        optionalObjectJson(config, 'amTokenHeadersJson', 'AM Token Headers') || {},
-        vars(),
-      ),
-    };
-    const payload = resolveTemplates(
-      optionalObjectJson(config, 'amTokenBodyJson', 'AM Token Body') || {},
-      vars(),
-    );
-    logs.push({ step: 'am.token.request', headers, payload });
-    const res = await requestJson({
-      method: 'POST',
-      url: `${baseUrl}/v1/service/am/token`,
-      headers,
-      body: payload,
-    });
-    logs.push({ step: 'am.token.response', status: res.status, body: res.body });
-    if (res.status !== 200)
-      throw httpError(`AM token failed`, { status: res.status, response: res.body }, logs, state);
-    state.AM_TOKEN = res.body?.data?.token || state.AM_TOKEN;
-    result.amToken = res.body;
-    processStateExtraction(input.stateExtractMapping, result, state, res.body);
-  }
-
-  if (steps.includes('patch')) {
-    const headers = {
-      'content-type': 'application/json',
-      ...resolveTemplates(
-        optionalObjectJson(config, 'maintenanceHeadersJson', 'Maintenance Headers') || {},
-        vars(),
-      ),
-    };
-    const payload = resolveTemplates(
-      optionalObjectJson(config, 'maintenanceBodyJson', 'Maintenance Body') || {},
-      vars(),
-    );
-    logs.push({ step: 'maintenance.patch.request', headers, payload });
-    const res = await requestJson({
-      method: 'PATCH',
-      url: `${baseUrl}/v1/internal/game/${encodeURIComponent(config.gameCode)}/maintenance`,
-      headers,
-      body: payload,
-    });
-    logs.push({ step: 'maintenance.patch.response', status: res.status, body: res.body });
-    if (res.status !== 200)
-      throw httpError(`Maintenance patch failed`, { status: res.status, response: res.body }, logs, state);
-    result.patch = res.body;
-    processStateExtraction(input.stateExtractMapping, result, state, res.body);
-  }
-
-  processStateExtraction(input.stateExtractMapping, result, state);
-  return {
-    result,
-    state,
-    logs,
-    
-    requestedAt,
-    respondedAt: displayTime(),
-  };
-}
-
-// -------------------------------------------------------------
-// DEFAULT TEMPLATES CONFIG GENERATOR
-// -------------------------------------------------------------
-function defaultConfig() {
-  const rgs = readEnv(path.join(RGS_DIR, '.env'));
-  const lobby = readEnv(path.join(LOBBY_DIR, '.env'));
-  const maintenance = readEnv(path.join(MAINTENANCE_DIR, '.env'));
-  return {
-    rgs: {
-      sessionStartHeadersJson: prettyJson({
-        'x-signature': '$SIGNATURE',
-        'content-type': 'application/json',
-      }),
-      sessionStartBodyJson: prettyJson({
-        gameCode: '$GAME_CODE',
-        lang: 'en',
-        gameSetting: { rtpConfigCode: '$RTP_CONFIG_CODE', isGeoBlocking: true },
-        country: 'GB',
-        isTestingPlayer: false,
-        mode: 'real',
-        operator: 'QARealGameOperator',
-        brand: 'QARealGameBrand',
-        playerId: 'QARealGameOperator:QARealGameBrand:kyle0c',
-        currency: 'EUR',
-        currencyId: 1,
-        externalPlayerId: 'kyle0c',
-        balance: '10000',
-        maxExposure: 0,
-        licenseConfig: {},
-        callback: 'https://httpbin.org/status/200',
-      }),
-      sessionActivateHeadersJson: prettyJson({ 'content-type': 'application/json' }),
-      sessionActivateBodyJson: prettyJson({
-        token: '$SESSION_TOKEN',
-        ts: 0,
-        timezone: 'us',
-        analytics: {
-          language: 'us',
-          device: 'mobile',
-          resolution: { w: 0, h: 0 },
-          orientation: 'landscape',
-          connection: 'slow-2g',
-        },
-      }),
-      betHeadersJson: prettyJson({
-        'cloudfront-viewer-country': 'JP',
-        'cloudfront-viewer-address': '1.2.3.4',
-        'x-access-token': '$ACCESS_TOKEN',
-        authorization: 'Bearer $ACCESS_TOKEN',
-      }),
-      betBodyJson: prettyJson({
-        session: '$SESSION_ID',
-        bet: { type: 'regular', value: '2' },
-        stakeMode: { type: 'commonGame', multiplier: 1, name: 'regular bet', rtp: 96.56 },
-        ts: 177445520478,
-      }),
-      actionHeadersJson: prettyJson({
-        'cloudfront-viewer-country': 'JP',
-        'cloudfront-viewer-address': '1.2.3.4',
-        'x-access-token': '$ACCESS_TOKEN',
-        authorization: 'Bearer $ACCESS_TOKEN',
-      }),
-      actionBodyJson: prettyJson({
-        session: '$SESSION_ID',
-        roundId: '$ROUND_ID',
-        action: '$ACTION',
-        ts: '$NOW_MS',
-      }),
-      finishHeadersJson: prettyJson({
-        'cloudfront-viewer-country': 'JP',
-        'cloudfront-viewer-address': '1.2.3.4',
-        'x-access-token': '$ACCESS_TOKEN',
-        authorization: 'Bearer $ACCESS_TOKEN',
-      }),
-      finishBodyJson: prettyJson({ session: '$SESSION_ID', roundId: '$ROUND_ID', ts: '$NOW_MS' }),
-    },
-    lobby: {
-      sessionStartHeadersJson: prettyJson({
-        'x-signature': '$SIGNATURE',
-        'content-type': 'application/json',
-      }),
-      sessionStartBodyJson: prettyJson({
-        gameCode: '$GAME_CODE',
-        lang: 'en',
-        gameSetting: { rtpConfigCode: '$RTP_CONFIG_CODE', isGeoBlocking: true },
-        country: 'GB',
-        isTestingPlayer: false,
-        mode: 'real',
-        operator: 'QARealGameOperator',
-        brand: 'QARealGameBrand',
-        playerId: 'QARealGameOperator:QARealGameBrand:kyle0c',
-        currency: 'EUR',
-        currencyId: 1,
-        externalPlayerId: 'kyle0c',
-        balance: '10000',
-        maxExposure: 0,
-        licenseConfig: {},
-        callback: 'https://httpbin.org/status/200',
-      }),
-      sessionActivateHeadersJson: prettyJson({ 'content-type': 'application/json' }),
-      sessionActivateBodyJson: prettyJson({
-        token: '$SESSION_TOKEN',
-        ts: 0,
-        timezone: 'us',
-        analytics: {
-          language: 'us',
-          device: 'mobile',
-          resolution: { w: 0, h: 0 },
-          orientation: 'landscape',
-          connection: 'slow-2g',
-        },
-      }),
-      tokenActivateHeadersJson: prettyJson({ authorization: 'Bearer $GAME_ACCESS_TOKEN' }),
-      tokenActivateBodyJson: 'null',
-      tokenRefreshHeadersJson: prettyJson({ authorization: 'Bearer $LOBBY_ACCESS_TOKEN' }),
-      tokenRefreshBodyJson: prettyJson({ refreshToken: '$LOBBY_REFRESH_TOKEN' }),
-    },
-    maintenance: {
-      userId: maintenance.AM_USER_ID || '0',
-      account: maintenance.AM_ACCOUNT || 'kyle.c',
-      code: maintenance.AM_CODE || '*',
-      routeKey: maintenance.AM_ROUTE_KEY || '*',
-      amTokenHeadersJson: prettyJson({ accept: 'application/json', 'x-signature': '$SIGNATURE' }),
-      amTokenBodyJson: prettyJson({
-        userId: '$USER_ID',
-        account: '$ACCOUNT',
-        code: '$CODE',
-        permission: [
-          { routeKey: '$ROUTE_KEY', methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', '*'] },
-        ],
-      }),
-      maintenanceHeadersJson: prettyJson({
-        accept: 'application/json',
-        'x-access-token': '$AM_TOKEN',
-      }),
-      maintenanceBodyJson: prettyJson({ isMaintenance: '$IS_MAINTENANCE' }),
-    },
-  };
 }
 
 async function handleApi(req, res, pathname) {
@@ -836,15 +322,13 @@ async function handleApi(req, res, pathname) {
       }
     }
 
-    if (req.method === 'GET' && pathname === '/api/config')
-      return jsonResponse(res, 200, defaultConfig());
+    if (req.method === 'GET' && pathname === '/api/flows')
+      return jsonResponse(res, 200, flowsManifest());
 
-    if (req.method === 'POST' && pathname === '/api/rgs-bet')
-      return jsonResponse(res, 200, await runBetFlow(await parseJsonBody(req)));
-    if (req.method === 'POST' && pathname === '/api/rgs-lobby')
-      return jsonResponse(res, 200, await runLobbyFlow(await parseJsonBody(req)));
-    if (req.method === 'POST' && pathname === '/api/maintenance')
-      return jsonResponse(res, 200, await runMaintenanceFlow(await parseJsonBody(req)));
+    if (req.method === 'POST' && pathname.startsWith('/api/flow/')) {
+      const key = decodeURIComponent(pathname.slice('/api/flow/'.length));
+      return jsonResponse(res, 200, await runFlow(key, await parseJsonBody(req)));
+    }
 
     jsonResponse(res, 404, { error: 'Not found' });
   } catch (error) {
